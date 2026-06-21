@@ -1,0 +1,6 @@
+{
+  "$comment": "다크웹/유출 모니터링 대상. domains 에 회사 도메인을 넣으면 해당 도메인 전체 계정의 유출 여부를 조회한다. HIBP 도메인 검색은 사전에 HIBP 대시보드에서 도메인 소유 검증이 필요하다.",
+  "domains": ["jbfg.com"],
+  "extraAccounts": [],
+  "minSeverity": "low"
+}

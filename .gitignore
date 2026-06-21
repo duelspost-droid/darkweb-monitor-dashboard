@@ -1,0 +1,11 @@
+node_modules
+.next
+out
+dist
+.env
+.env.local
+.env.*.local
+npm-debug.log*
+.DS_Store
+*.tsbuildinfo
+# 스캔 이력은 커밋(웹 기록 목적). 단 일별 스냅샷이 많아지면 정리.
