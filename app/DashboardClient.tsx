@@ -177,22 +177,75 @@ function LoginGate({ onSignedIn }: { onSignedIn: () => void }) {
   );
 }
 
+function SetPasswordPanel({ onDone, onCancel }: { onDone: () => void; onCancel?: () => void }) {
+  const [pw, setPw] = useState("");
+  const [pw2, setPw2] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setErr("");
+    if (pw.length < 6) return setErr("비밀번호는 6자 이상이어야 합니다.");
+    if (pw !== pw2) return setErr("두 비밀번호가 일치하지 않습니다.");
+    setBusy(true);
+    const { error } = await supabase.auth.updateUser({ password: pw });
+    setBusy(false);
+    if (error) setErr("설정 실패: " + error.message);
+    else {
+      // 설정 후 URL의 토큰 흔적 제거
+      if (typeof window !== "undefined") window.history.replaceState({}, "", window.location.pathname);
+      onDone();
+    }
+  }
+
+  return (
+    <div className="flex min-h-[70vh] items-center justify-center px-4">
+      <form onSubmit={submit} className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-7 shadow-xl">
+        <div className="mb-5 flex items-center gap-2">
+          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-rose-600 text-white"><Lock size={18} aria-hidden /></span>
+          <div>
+            <h1 className="text-lg font-bold text-ink">비밀번호 설정</h1>
+            <p className="text-xs text-muted">관리자 계정의 새 비밀번호를 입력하세요</p>
+          </div>
+        </div>
+        <label className="mb-1 block text-xs font-semibold text-muted">새 비밀번호</label>
+        <input type="password" autoComplete="new-password" required value={pw} onChange={(e) => setPw(e.target.value)} className="mb-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-rose-400" />
+        <label className="mb-1 block text-xs font-semibold text-muted">새 비밀번호 확인</label>
+        <input type="password" autoComplete="new-password" required value={pw2} onChange={(e) => setPw2(e.target.value)} className="mb-4 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-rose-400" />
+        {err && <p className="mb-3 text-xs font-semibold text-rose-600">{err}</p>}
+        <button type="submit" disabled={busy} className="w-full rounded-lg bg-rose-600 py-2.5 text-sm font-bold text-white transition hover:bg-rose-700 disabled:opacity-60">{busy ? "설정 중…" : "비밀번호 설정"}</button>
+        {onCancel && <button type="button" onClick={onCancel} className="mt-2 w-full rounded-lg border border-slate-300 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50">취소</button>}
+      </form>
+    </div>
+  );
+}
+
 export default function DashboardClient() {
   const [session, setSession] = useState<Session | null>(null);
   const [ready, setReady] = useState(false);
   const [scan, setScan] = useState<BreachScan | null>(null);
   const [loadErr, setLoadErr] = useState("");
+  const [mustSetPw, setMustSetPw] = useState(false); // 초대/재설정 링크로 진입 → 비번 설정 필요
+  const [showSetPw, setShowSetPw] = useState(false); // 로그인 상태에서 수동 변경
 
   useEffect(() => {
     if (!supabaseConfigured) {
       setReady(true);
       return;
     }
+    // 초대/재설정 메일 링크는 URL에 type=recovery|invite 를 담아 온다.
+    const hash = typeof window !== "undefined" ? window.location.hash + window.location.search : "";
+    if (/type=(recovery|invite)/.test(hash)) setMustSetPw(true);
+
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session);
       setReady(true);
     });
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => setSession(s));
+    const { data: sub } = supabase.auth.onAuthStateChange((event, s) => {
+      setSession(s);
+      if (event === "PASSWORD_RECOVERY") setMustSetPw(true);
+    });
     return () => sub.subscription.unsubscribe();
   }, []);
 
@@ -216,6 +269,17 @@ export default function DashboardClient() {
     );
   if (!ready) return <p className="px-4 py-20 text-center text-sm text-muted">로딩 중…</p>;
   if (!session) return <LoginGate onSignedIn={load} />;
+  if (mustSetPw || showSetPw)
+    return (
+      <SetPasswordPanel
+        onDone={() => {
+          setMustSetPw(false);
+          setShowSetPw(false);
+          load();
+        }}
+        onCancel={showSetPw && !mustSetPw ? () => setShowSetPw(false) : undefined}
+      />
+    );
   if (loadErr)
     return <p className="px-4 py-20 text-center text-sm text-rose-600">데이터 조회 실패: {loadErr}</p>;
   if (!scan) return <p className="px-4 py-20 text-center text-sm text-muted">데이터 불러오는 중…</p>;
@@ -247,12 +311,20 @@ export default function DashboardClient() {
         <span className="inline-flex items-center gap-1.5 rounded-full border border-rose-300 bg-rose-50 px-3 py-1 text-xs font-bold text-rose-700">
           <Lock size={12} aria-hidden /> 관리자 전용 · 식별 데이터 (외부 공유 금지)
         </span>
-        <button
-          onClick={() => supabase.auth.signOut()}
-          className="inline-flex items-center gap-1.5 rounded-full border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50"
-        >
-          <LogOut size={12} aria-hidden /> 로그아웃
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowSetPw(true)}
+            className="inline-flex items-center gap-1.5 rounded-full border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+          >
+            <Lock size={12} aria-hidden /> 비밀번호 변경
+          </button>
+          <button
+            onClick={() => supabase.auth.signOut()}
+            className="inline-flex items-center gap-1.5 rounded-full border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+          >
+            <LogOut size={12} aria-hidden /> 로그아웃
+          </button>
+        </div>
       </div>
 
       <PageHero
