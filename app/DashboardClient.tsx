@@ -1,0 +1,418 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import {
+  AlertTriangle,
+  Bug,
+  CalendarClock,
+  Database,
+  Globe,
+  Info,
+  LogOut,
+  Lock,
+  ShieldAlert,
+  ShieldCheck,
+  Sparkles,
+} from "lucide-react";
+import type { Session } from "@supabase/supabase-js";
+import { PageHero } from "@/components/ui/PageHero";
+import { Panel } from "@/components/ui/Panel";
+import { StatTile } from "@/components/ui/StatTile";
+import { BarList } from "@/components/ui/BarList";
+import { supabase, supabaseConfigured } from "@/lib/supabase/browserClient";
+import type { BreachScan, BreachSeverity } from "@/lib/types/breachMonitor";
+
+const SEVERITY_META: Record<BreachSeverity, { label: string; color: string; chip: string }> = {
+  critical: { label: "심각", color: "#be123c", chip: "bg-rose-100 text-rose-700 border-rose-300" },
+  high: { label: "높음", color: "#b45309", chip: "bg-amber-100 text-amber-700 border-amber-300" },
+  medium: { label: "보통", color: "#3157a4", chip: "bg-sky-100 text-sky-700 border-sky-300" },
+  low: { label: "낮음", color: "#0f766e", chip: "bg-teal-100 text-teal-700 border-teal-300" },
+};
+const SEVERITY_RANK: Record<string, number> = { low: 0, medium: 1, high: 2, critical: 3 };
+
+function fmtDate(iso: string) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString("ko-KR", { year: "numeric", month: "2-digit", day: "2-digit" });
+}
+
+// Supabase 3개 테이블 → BreachScan 조립 (관리자 인증 후 클라이언트에서).
+async function fetchScan(): Promise<BreachScan> {
+  const [bf, sr, inf] = await Promise.all([
+    supabase
+      .from("breach_findings")
+      .select(
+        "finding_id,account_masked,account,domain,breach_name,breach_title,breach_date,data_classes,severity,is_new,discovered_at,source"
+      ),
+    supabase.from("scan_runs").select("*").order("scanned_at", { ascending: false }).limit(30),
+    supabase.from("infostealer_findings").select("*").order("total", { ascending: false }),
+  ]);
+  if (bf.error) throw bf.error;
+  if (sr.error) throw sr.error;
+  if (inf.error) throw inf.error;
+
+  const findings = (bf.data ?? []).map((r) => ({
+    id: r.finding_id,
+    // 관리자 인증 뒤: 식별(full) 우선, 없으면 마스킹.
+    accountMasked: r.account || r.account_masked,
+    domain: r.domain,
+    breachName: r.breach_name,
+    breachTitle: r.breach_title ?? r.breach_name,
+    breachDate: r.breach_date ?? "",
+    dataClasses: r.data_classes ?? [],
+    severity: r.severity as BreachSeverity,
+    isNew: !!r.is_new,
+    discoveredAt: r.discovered_at,
+    source: r.source ?? "",
+  }));
+  findings.sort((a, b) => {
+    if (a.isNew !== b.isNew) return a.isNew ? -1 : 1;
+    if (SEVERITY_RANK[b.severity] !== SEVERITY_RANK[a.severity])
+      return SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity];
+    return (b.breachDate || "").localeCompare(a.breachDate || "");
+  });
+
+  const bySeverity = { critical: 0, high: 0, medium: 0, low: 0 } as Record<BreachSeverity, number>;
+  const byDomainMap = new Map<string, number>();
+  let newCount = 0;
+  for (const f of findings) {
+    bySeverity[f.severity] = (bySeverity[f.severity] ?? 0) + 1;
+    byDomainMap.set(f.domain, (byDomainMap.get(f.domain) ?? 0) + 1);
+    if (f.isNew) newCount++;
+  }
+  const latest = (sr.data ?? [])[0];
+  const domains: string[] = latest?.domains?.length ? latest.domains : [...byDomainMap.keys()];
+
+  return {
+    generatedAt: latest?.scanned_at ?? new Date().toISOString(),
+    source: latest?.source ?? "Supabase",
+    status: latest?.status ?? "ok",
+    isDemo: false,
+    domains,
+    findings,
+    summary: {
+      total: findings.length,
+      newCount,
+      bySeverity,
+      byDomain: [...byDomainMap.entries()].map(([domain, count]) => ({ domain, count })),
+    },
+    history: [...(sr.data ?? [])]
+      .reverse()
+      .map((r) => ({ scannedAt: r.scanned_at, total: r.total, newCount: r.new_count })),
+    note: latest?.note ?? undefined,
+    infostealer: (inf.data ?? []).map((i) => ({
+      domain: i.domain,
+      source: i.source,
+      total: i.total,
+      employees: i.employees,
+      users: i.users,
+      thirdParties: i.third_parties,
+      affectedUrls: i.affected_urls ?? [],
+      scannedAt: i.scanned_at,
+    })),
+    sources: latest?.sources ?? [],
+  };
+}
+
+function LoginGate({ onSignedIn }: { onSignedIn: () => void }) {
+  const [email, setEmail] = useState("");
+  const [pw, setPw] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setErr("");
+    const { error } = await supabase.auth.signInWithPassword({ email, password: pw });
+    setBusy(false);
+    if (error) setErr("로그인 실패: 이메일/비밀번호를 확인하세요.");
+    else onSignedIn();
+  }
+
+  return (
+    <div className="flex min-h-[70vh] items-center justify-center px-4">
+      <form onSubmit={submit} className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-7 shadow-xl">
+        <div className="mb-5 flex items-center gap-2">
+          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-rose-600 text-white">
+            <Lock size={18} aria-hidden />
+          </span>
+          <div>
+            <h1 className="text-lg font-bold text-ink">관리자 로그인</h1>
+            <p className="text-xs text-muted">다크웹 유출 모니터링 · 내부 전용</p>
+          </div>
+        </div>
+        <label className="mb-1 block text-xs font-semibold text-muted">이메일</label>
+        <input
+          type="email"
+          autoComplete="username"
+          required
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          className="mb-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-rose-400"
+        />
+        <label className="mb-1 block text-xs font-semibold text-muted">비밀번호</label>
+        <input
+          type="password"
+          autoComplete="current-password"
+          required
+          value={pw}
+          onChange={(e) => setPw(e.target.value)}
+          className="mb-4 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-rose-400"
+        />
+        {err && <p className="mb-3 text-xs font-semibold text-rose-600">{err}</p>}
+        <button
+          type="submit"
+          disabled={busy}
+          className="w-full rounded-lg bg-rose-600 py-2.5 text-sm font-bold text-white transition hover:bg-rose-700 disabled:opacity-60"
+        >
+          {busy ? "확인 중…" : "로그인"}
+        </button>
+        <p className="mt-4 text-center text-[11px] leading-5 text-muted">
+          승인된 관리자만 접근할 수 있습니다. 데이터는 로그인 후에만 조회됩니다(RLS 보호).
+        </p>
+      </form>
+    </div>
+  );
+}
+
+export default function DashboardClient() {
+  const [session, setSession] = useState<Session | null>(null);
+  const [ready, setReady] = useState(false);
+  const [scan, setScan] = useState<BreachScan | null>(null);
+  const [loadErr, setLoadErr] = useState("");
+
+  useEffect(() => {
+    if (!supabaseConfigured) {
+      setReady(true);
+      return;
+    }
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      setReady(true);
+    });
+    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => setSession(s));
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  const load = useCallback(() => {
+    setLoadErr("");
+    fetchScan()
+      .then(setScan)
+      .catch((e) => setLoadErr(e?.message ?? "데이터 조회 실패"));
+  }, []);
+
+  useEffect(() => {
+    if (session) load();
+    else setScan(null);
+  }, [session, load]);
+
+  if (!supabaseConfigured)
+    return (
+      <p className="px-4 py-20 text-center text-sm text-muted">
+        Supabase 환경변수(NEXT_PUBLIC_SUPABASE_URL / ANON_KEY)가 설정되지 않았습니다.
+      </p>
+    );
+  if (!ready) return <p className="px-4 py-20 text-center text-sm text-muted">로딩 중…</p>;
+  if (!session) return <LoginGate onSignedIn={load} />;
+  if (loadErr)
+    return <p className="px-4 py-20 text-center text-sm text-rose-600">데이터 조회 실패: {loadErr}</p>;
+  if (!scan) return <p className="px-4 py-20 text-center text-sm text-muted">데이터 불러오는 중…</p>;
+
+  const { summary } = scan;
+  const severityItems = (Object.keys(SEVERITY_META) as BreachSeverity[])
+    .map((sev) => ({
+      label: SEVERITY_META[sev].label,
+      value: summary.bySeverity[sev] ?? 0,
+      color: SEVERITY_META[sev].color,
+      display: String(summary.bySeverity[sev] ?? 0),
+    }))
+    .filter((it) => it.value > 0);
+  const domainItems = summary.byDomain
+    .map((d) => ({ label: d.domain, value: d.count, display: `${d.count}건` }))
+    .sort((a, b) => b.value - a.value);
+  const historyRecent = [...scan.history].slice(-12).reverse();
+  const infostealer = scan.infostealer ?? [];
+  const infoTotal = infostealer.reduce((s, i) => s + i.total, 0);
+  const infoItems = infostealer
+    .map((i) => ({ label: i.domain, value: i.total, display: `${i.total}건` }))
+    .filter((it) => it.value > 0)
+    .sort((a, b) => b.value - a.value);
+  const sources = scan.sources ?? [];
+
+  return (
+    <div className="space-y-7 pb-14">
+      <div className="flex items-center justify-between gap-3">
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-rose-300 bg-rose-50 px-3 py-1 text-xs font-bold text-rose-700">
+          <Lock size={12} aria-hidden /> 관리자 전용 · 식별 데이터 (외부 공유 금지)
+        </span>
+        <button
+          onClick={() => supabase.auth.signOut()}
+          className="inline-flex items-center gap-1.5 rounded-full border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+        >
+          <LogOut size={12} aria-hidden /> 로그아웃
+        </button>
+      </div>
+
+      <PageHero
+        kicker="보안 · 다크웹 유출 모니터링 (관리자)"
+        title="회사 계정 유출 모니터링"
+        description="매일 자정 유출 인텔리전스 API를 조회해 회사 계정 노출을 추적합니다. 관리자 인증 후 식별 데이터를 표시합니다."
+        right={
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-semibold text-white">
+            <CalendarClock size={13} aria-hidden /> 최근 스캔 {fmtDate(scan.generatedAt)}
+          </span>
+        }
+      />
+
+      <div className="stat-grid">
+        <StatTile label="모니터링 도메인" value={scan.domains.length} unit="개" icon={<Globe size={18} />} accent="#3157a4" sub={scan.domains.join(", ") || "미설정"} />
+        <StatTile label="유출 노출 계정" value={summary.total} unit="건" icon={<ShieldAlert size={18} />} accent="#be123c" trend={{ label: summary.total > 0 ? "조치 필요" : "노출 없음", dir: summary.total > 0 ? "down" : "up" }} sub="식별 표시" />
+        <StatTile label="이번 스캔 신규" value={summary.newCount} unit="건" icon={<Sparkles size={18} />} accent="#b45309" trend={{ label: summary.newCount > 0 ? "신규 발견" : "변동 없음", dir: summary.newCount > 0 ? "down" : "neutral" }} sub="직전 대비" />
+        <StatTile label="인포스틸러 감염" value={infoTotal} unit="건" icon={<Bug size={18} />} accent="#7f1d1d" trend={{ label: "도메인 전수", dir: infoTotal > 0 ? "down" : "up" }} sub="Cavalier" />
+      </div>
+
+      <section className="grid gap-4 lg:grid-cols-2">
+        <Panel title="심각도 분포" subtitle="노출 데이터 분류 기반 위험도">
+          {severityItems.length ? <BarList items={severityItems} unit="건" /> : <p className="py-6 text-center text-sm text-muted">노출 없음.</p>}
+        </Panel>
+        <Panel title="도메인별 노출 (계정 유출)" subtitle="모니터링 도메인별 건수">
+          {domainItems.length ? <BarList items={domainItems} /> : <p className="py-6 text-center text-sm text-muted">데이터 없음.</p>}
+        </Panel>
+      </section>
+
+      <Panel title="유출 계정 상세 (식별)" subtitle="관리자 인증 뒤 회사 계정을 식별 표시합니다." right={<span className="chip chip-neutral">총 {summary.total}건</span>} bodyClassName="p-0">
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[720px] text-sm">
+            <thead>
+              <tr className="border-b border-slate-200 text-left text-xs font-semibold uppercase tracking-wide text-muted">
+                <th className="px-5 py-3">계정</th>
+                <th className="px-5 py-3">유출 사건</th>
+                <th className="px-5 py-3">유출 일자</th>
+                <th className="px-5 py-3">노출 항목</th>
+                <th className="px-5 py-3">심각도</th>
+                <th className="px-5 py-3">출처</th>
+              </tr>
+            </thead>
+            <tbody>
+              {scan.findings.length === 0 ? (
+                <tr><td colSpan={6} className="px-5 py-10 text-center text-muted">노출된 계정이 없습니다. 👍</td></tr>
+              ) : (
+                scan.findings.map((f) => {
+                  const sev = SEVERITY_META[f.severity];
+                  return (
+                    <tr key={f.id} className="border-b border-slate-100 last:border-0 hover:bg-slate-50">
+                      <td className="px-5 py-3 font-mono font-semibold text-ink">
+                        <span className="inline-flex items-center gap-2">
+                          {f.isNew && <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">NEW</span>}
+                          {f.accountMasked}
+                        </span>
+                      </td>
+                      <td className="px-5 py-3 text-slate-700">{f.breachTitle}</td>
+                      <td className="px-5 py-3 font-mono text-xs text-muted">{f.breachDate || "—"}</td>
+                      <td className="px-5 py-3">
+                        <div className="flex flex-wrap gap-1">
+                          {f.dataClasses.slice(0, 4).map((dc) => (
+                            <span key={dc} className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[11px] text-slate-600">{dc}</span>
+                          ))}
+                          {f.dataClasses.length > 4 && <span className="text-[11px] text-muted">+{f.dataClasses.length - 4}</span>}
+                        </div>
+                      </td>
+                      <td className="px-5 py-3"><span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-semibold ${sev.chip}`}>{sev.label}</span></td>
+                      <td className="px-5 py-3 text-[11px] text-muted">{f.source}</td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Panel>
+
+      <Panel title="다크웹 인포스틸러 감염 (도메인 전수)" subtitle="악성코드 감염으로 탈취된 다크웹 스틸러 로그. 도메인 전체 집계." right={<span className="chip chip-neutral"><Bug size={13} className="mr-1 inline" aria-hidden /> 총 {infoTotal.toLocaleString()}건</span>}>
+        {infostealer.length === 0 ? (
+          <p className="py-6 text-center text-sm text-muted">인포스틸러 데이터 없음.</p>
+        ) : (
+          <div className="space-y-5">
+            {infoItems.length > 0 && <BarList items={infoItems} />}
+            <div className="grid gap-3 md:grid-cols-2">
+              {infostealer.filter((i) => i.total > 0).sort((a, b) => b.total - a.total).map((i) => (
+                <div key={i.domain} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="flex items-center justify-between">
+                    <span className="font-mono text-sm font-bold text-ink">{i.domain}</span>
+                    <span className="text-xs font-semibold text-rose-700">{i.total.toLocaleString()}건</span>
+                  </div>
+                  <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-muted">
+                    <span>임직원 {i.employees}</span><span>· 사용자 {i.users}</span><span>· 서드파티 {i.thirdParties}</span>
+                  </div>
+                  {i.affectedUrls.length > 0 && (
+                    <ul className="mt-2 space-y-1">
+                      {i.affectedUrls.slice(0, 4).map((u) => (
+                        <li key={u.url} className="flex items-center justify-between gap-2 text-[11px]">
+                          <span className="truncate font-mono text-slate-600">{u.url}</span>
+                          <span className="shrink-0 text-muted">{u.occurrence}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </Panel>
+
+      {sources.length > 0 && (
+        <Panel title="수집 출처" subtitle="어떤 인텔리전스 소스에서 언제 수집했는지 기록">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[560px] text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 text-left text-xs font-semibold uppercase tracking-wide text-muted">
+                  <th className="px-3 py-2">소스</th><th className="px-3 py-2">종류</th><th className="px-3 py-2">엔드포인트</th><th className="px-3 py-2">수집</th><th className="px-3 py-2">시각</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sources.map((s) => (
+                  <tr key={s.name} className="border-b border-slate-100 last:border-0">
+                    <td className="px-3 py-2 font-semibold text-ink"><Database size={13} className="mr-1 inline text-slate-400" aria-hidden />{s.name}</td>
+                    <td className="px-3 py-2"><span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${s.kind === "infostealer" ? "border-rose-300 bg-rose-100 text-rose-700" : "border-sky-300 bg-sky-100 text-sky-700"}`}>{s.kind === "infostealer" ? "인포스틸러" : "데이터 유출"}</span></td>
+                    <td className="px-3 py-2 font-mono text-[11px] text-muted">{s.endpoint}</td>
+                    <td className="px-3 py-2 text-slate-700">{s.count.toLocaleString()}</td>
+                    <td className="px-3 py-2 font-mono text-[11px] text-muted">{fmtDate(s.scannedAt)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Panel>
+      )}
+
+      <section className="grid gap-4 lg:grid-cols-2">
+        <Panel title="스캔 이력" subtitle="최근 스캔별 노출 건수 추이">
+          {historyRecent.length ? (
+            <ul className="space-y-2">
+              {historyRecent.map((h) => (
+                <li key={h.scannedAt} className="flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-sm">
+                  <span className="font-mono text-xs text-muted">{fmtDate(h.scannedAt)}</span>
+                  <span className="text-slate-700">총 <strong className="text-ink">{h.total}</strong>건
+                    {h.newCount > 0 && <span className="ml-2 rounded-full bg-amber-100 px-1.5 py-0.5 text-[11px] font-bold text-amber-700">신규 {h.newCount}</span>}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : <p className="py-6 text-center text-sm text-muted">이력 없음.</p>}
+        </Panel>
+        <Panel title="동작 방식 · 운영 안내" subtitle="합법적 유출 인텔리전스 기반 모니터링">
+          <ul className="space-y-3 text-sm leading-6 text-slate-700">
+            <li className="flex gap-2"><ShieldCheck size={16} className="mt-0.5 shrink-0 text-teal-600" aria-hidden /><span>다크웹 직접 크롤링 없이 검증된 유출 인텔리전스 API(XposedOrNot·Hudson Rock Cavalier)로 조회합니다.</span></li>
+            <li className="flex gap-2"><ShieldCheck size={16} className="mt-0.5 shrink-0 text-teal-600" aria-hidden /><span>매일 자정(KST) Supabase Edge Function 자동 배치로 갱신됩니다.</span></li>
+            <li className="flex gap-2"><Info size={16} className="mt-0.5 shrink-0 text-sky-600" aria-hidden /><span>이 화면은 관리자 인증 후에만 데이터가 조회됩니다(RLS). 고객 개인 데이터는 집계까지만 포함합니다.</span></li>
+            <li className="flex gap-2"><AlertTriangle size={16} className="mt-0.5 shrink-0 text-amber-600" aria-hidden /><span>유출/감염 확인 계정은 즉시 비밀번호 재설정·MFA, 활성 세션 무효화를 권고합니다.</span></li>
+          </ul>
+          <p className="mt-4 border-t border-slate-100 pt-3 text-xs text-muted">출처: {scan.source}</p>
+        </Panel>
+      </section>
+    </div>
+  );
+}

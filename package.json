@@ -12,9 +12,11 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "security:scan": "node scripts/monitor_breaches.mjs",
+    "security:employee": "node scripts/check_employee_stealers.mjs",
     "supabase:pull": "node scripts/pull_from_supabase.mjs"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.108.2",
     "lucide-react": "^0.468.0",
     "next": "16.2.6",
     "react": "19.2.6",

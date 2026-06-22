@@ -136,7 +136,7 @@ async function collectCavalier(domains: string[], nowIso: string): Promise<Infos
 }
 
 interface Finding {
-  finding_id: string; account_masked: string; domain: string; breach_name: string;
+  finding_id: string; account_masked: string; account: string; domain: string; breach_name: string;
   breach_title: string; breach_date: string | null; data_classes: string[]; severity: string;
   password_risk?: string; industry?: string; reference_url?: string; breach_logo?: string; source?: string;
 }
@@ -144,6 +144,7 @@ async function mkFinding(domain: string, alias: string, name: string, meta: Cata
   return {
     finding_id: await sha1Hex(`${domain}|${alias}|${name}`),
     account_masked: `${maskLocal(alias)}@${domain}`,
+    account: `${alias}@${domain}`, // 식별(full) — RLS(authenticated)로만 노출
     domain, breach_name: name, breach_title: meta?.title || name,
     breach_date: meta?.date || null, data_classes: koClasses(meta?.dataClasses ?? []),
     severity: severityFor(meta?.dataClasses ?? []),

@@ -8,6 +8,8 @@ dist
 npm-debug.log*
 .DS_Store
 *.tsbuildinfo
-# 모니터링 대상 실제 이메일(개인정보) — 커밋 금지. base config는 마스킹/도메인만.
-data/security/monitor_config.local.json
+# 개인정보/내부전용(*.local.*) — 커밋 금지. 모니터링 이메일·임직원 점검 리포트·내부 보고서 등.
+data/security/*.local.json
+data/security/*.local.html
+data/security/*.local.*
 # 스캔 이력은 커밋(웹 기록 목적). 단 일별 스냅샷이 많아지면 정리.
