@@ -6,7 +6,7 @@ on:
       - main
   workflow_dispatch:
   schedule:
-    - cron: "0 16 * * *" # 매일 01:00 KST (16:00 UTC)
+    - cron: "30 15 * * *" # 매일 00:30 KST (15:30 UTC) — Supabase 자정 스캔(15:00 UTC) 직후 반영
 
 permissions:
   contents: write
@@ -21,9 +21,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      HIBP_API_KEY: ${{ secrets.HIBP_API_KEY }}
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      # 스캔은 Supabase Edge Function(pg_cron, 15:00 UTC)이 수행. 여기선 결과를 읽어와 빌드.
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -37,19 +37,17 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run breach scan
-        timeout-minutes: 10
-        continue-on-error: true
-        run: npm run security:scan
+      - name: Sync from Supabase
+        timeout-minutes: 5
+        continue-on-error: true # 미설정/일시 오류 시 커밋된 스냅샷으로 빌드
+        run: npm run supabase:pull
 
-      - name: Commit scan results if changed
+      - name: Commit dashboard snapshot if changed
         uses: stefanzweifel/git-auto-commit-action@v7
         with:
-          commit_message: "Update daily breach scan"
+          commit_message: "Update dashboard snapshot from Supabase"
           file_pattern: >-
             lib/data/generated/breachMonitor.ts
-            data/security/latest_breach_scan.json
-            data/security/history/*.json
 
       - name: Build static site
         env:

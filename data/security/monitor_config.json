@@ -1,6 +1,6 @@
 {
-  "$comment": "다크웹/유출 모니터링 대상. domains 에 회사 도메인을 넣으면 해당 도메인 전체 계정의 유출 여부를 조회한다. HIBP 도메인 검색은 사전에 HIBP 대시보드에서 도메인 소유 검증이 필요하다.",
+  "$comment": "다크웹/유출 모니터링 대상. (1) HIBP_API_KEY 가 있으면 domains 를 도메인 전수 검색. (2) 키가 없으면 무료 XposedOrNot 로 accounts(개별 이메일)를 조회. 실제 이메일은 여기 대신 monitor_config.local.json(.gitignore) 에 넣으면 커밋되지 않는다. 저장은 항상 마스킹만.",
   "domains": ["jbfg.com"],
-  "extraAccounts": [],
+  "accounts": [],
   "minSeverity": "low"
 }

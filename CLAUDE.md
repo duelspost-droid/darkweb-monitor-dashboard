@@ -7,15 +7,20 @@
 - 이름: **다크웹 유출 모니터링 대시보드** (`darkweb-monitor-dashboard`)
 - 목적: 회사 도메인 계정의 다크웹·유출 노출을 매일 자동 조회 → 웹 대시보드에 마스킹 기록
 - 스택: Next.js 16 (App Router) · TypeScript · Tailwind CSS · lucide-react
-- 데이터 방식: **합법 유출 인텔리전스 API(Have I Been Pwned 도메인 검색)**.
+- 데이터 방식: **합법 유출 인텔리전스 API** — 무료 **XposedOrNot**(계정별) 또는 HIBP(도메인, 유료키).
   다크웹 직접 크롤링 금지. 평문 비밀번호 미수신.
+- 백엔드: **Supabase** (breach_findings·scan_runs). 매일 자정(KST) Edge Function+pg_cron 으로 수집.
 
 ## 핵심 파일 (수정 위치)
 
 | 목적 | 파일 |
 |------|------|
-| 수집 로직 | `scripts/monitor_breaches.mjs` |
-| 모니터링 대상 도메인 | `data/security/monitor_config.json` |
+| 로컬/CI 수집 로직 | `scripts/monitor_breaches.mjs` |
+| 자정 배치(서버) | `supabase/functions/scan-breaches/index.ts` (Deno) |
+| Supabase→정적사이트 동기화 | `scripts/pull_from_supabase.mjs` |
+| DB 스키마 | `supabase/migrations/00*.sql` |
+| 모니터링 도메인(공개) | `data/security/monitor_config.json` |
+| 모니터링 이메일(비공개·gitignore) | `data/security/monitor_config.local.json` |
 | 대시보드 UI | `app/page.tsx` |
 | 도메인 타입 | `lib/types/breachMonitor.ts` |
 | 자동 생성(편집 금지) | `lib/data/generated/breachMonitor.ts` |
@@ -23,10 +28,12 @@
 ## 데이터 흐름
 
 ```
-scripts/monitor_breaches.mjs
-  ← data/security/monitor_config.json (대상 도메인)
-  → data/security/latest_breach_scan.json (+ history/*.json)
-  → lib/data/generated/breachMonitor.ts  (정적 사이트가 import)
+[서버·매일 자정] pg_cron(15:00 UTC) → Edge Function scan-breaches
+   → XposedOrNot/HIBP 조회 → Supabase breach_findings + scan_runs (마스킹)
+[빌드] GitHub Actions(15:30 UTC) → npm run supabase:pull
+   → Supabase REST 읽기 → lib/data/generated/breachMonitor.ts → 정적 빌드 → Pages
+[로컬] npm run security:scan (monitor_config.local.json accounts → XposedOrNot)
+   → latest_breach_scan.json + generated/breachMonitor.ts
 app/page.tsx → breachScan 임포트해 렌더 (서버 컴포넌트)
 ```
 
@@ -39,19 +46,24 @@ app/page.tsx → breachScan 임포트해 렌더 (서버 컴포넌트)
 ## 명령
 
 ```bash
-npm run security:scan   # 스캔 (HIBP_API_KEY 없으면 데모 데이터)
-npm run dev             # 개발 서버
-npm run typecheck       # 타입 체크
-npm run build           # 빌드 (정적 export: NEXT_OUTPUT=export)
+npm run security:scan        # 로컬 스캔 (accounts 있으면 실데이터, 없으면 데모)
+npm run supabase:pull        # Supabase → 생성 파일 동기화 (SUPABASE_* 필요)
+npm run dev -- --webpack     # 개발 서버 (★로컬은 --webpack 필수, 아래 참고)
+npm run typecheck            # 타입 체크
+npm run build -- --webpack   # 정적 export 빌드 (NEXT_OUTPUT=export PAGES_BASE_PATH=/darkweb-monitor-dashboard)
 ```
 
-## 실데이터 전환
+> ⚠️ **로컬은 `--webpack` 필수**: Codex.app 번들 node 로 설치한 `@next/swc-darwin-arm64` 네이티브
+> 바인딩이 코드서명 Team ID 불일치로 로드 거부 → Turbopack(기본) 실패, WASM 폴백만 됨.
+> dev/build 모두 `-- --webpack` 붙일 것. CI(정식 node)에선 불필요.
 
-`HIBP_API_KEY` 발급(유료) + HIBP 대시보드 도메인 소유 검증 → `.env.local`/GitHub Secret 등록 →
-`monitor_config.json` 의 `domains` 설정 → `npm run security:scan`. 자세한 절차는 HANDOFF 5절.
+## 실데이터 / Supabase 배포
+
+무료(권장): `monitor_config.local.json` 의 `accounts` 에 실계정 → `npm run security:scan`.
+Supabase 백엔드 배포(자격증명 필요)와 cron·Edge Function·Vault 절차는 **HANDOFF 5-B절** 참고.
 
 ## CI/CD
 
-`.github/workflows/deploy.yml` — 매일 16:00 UTC(01:00 KST) 스캔 → 빌드 → GitHub Pages 배포 +
-생성 결과 자동 커밋. Pages: Settings → Pages → Source = GitHub Actions. 프로젝트 사이트면
-`PAGES_BASE_PATH=/darkweb-monitor-dashboard`(deploy.yml 에 이미 설정).
+`.github/workflows/deploy.yml` — 매일 **15:30 UTC(00:30 KST)** Supabase pull → 빌드 → Pages 배포.
+(스캔 자체는 Supabase pg_cron 이 15:00 UTC 수행.) Pages: Settings → Pages → Source = GitHub Actions.
+`PAGES_BASE_PATH=/darkweb-monitor-dashboard`(deploy.yml 에 설정). GitHub Secrets: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`.

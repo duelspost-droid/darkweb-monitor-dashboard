@@ -1,0 +1,6 @@
+# Supabase 프로젝트 설정. project_id 는 `supabase link --project-ref <ref>` 가 채운다.
+project_id = "darkweb-monitor-dashboard"
+
+[functions.scan-breaches]
+# JWT 대신 공유 시크릿(SCAN_SECRET) 헤더로 보호 → pg_cron 이 service_role 키 없이 호출 가능.
+verify_jwt = false

@@ -1,24 +1,24 @@
-// 다크웹/유출 계정 모니터링 수집기.
+// 다크웹/유출 계정 모니터링 수집기 (로컬/CI 실행용).
 //
-// 동작 개요:
-//  1) data/security/monitor_config.json 의 회사 도메인을 읽는다.
-//  2) HIBP_API_KEY 가 있으면 Have I Been Pwned 도메인 검색 API 로
-//     해당 도메인 계정의 유출 여부를 조회한다(평문 비밀번호는 받지 않음).
-//  3) 공개 breaches 메타데이터로 유출 사건명·일자·노출 항목·심각도를 보강한다.
-//  4) 직전 스캔과 비교해 신규 항목을 표시하고, 이력 타임라인을 누적한다.
-//  5) 결과를 마스킹된 형태로만:
-//       - data/security/latest_breach_scan.json (원본 기록)
-//       - data/security/history/breach_scan_<stamp>.json (이력)
-//       - lib/data/generated/breachMonitor.ts (정적 사이트가 임포트)
-//     로 저장한다.
+// 데이터 소스 우선순위:
+//  1) HIBP_API_KEY 가 있으면 Have I Been Pwned 도메인 검색 API(유료, 도메인 소유검증 필요)로
+//     config.domains 의 도메인 계정 유출을 전수 조회한다.
+//  2) 키가 없고 config.accounts(개별 이메일)가 있으면 무료 XposedOrNot API 로
+//     계정별 유출을 조회한다(키 불필요, 실데이터).
+//  3) 둘 다 없으면 페이지가 비지 않도록 데모 데이터(isDemo=true)를 생성한다.
 //
-// 중요(개인정보): 계정은 항상 마스킹(jo***@domain)으로만 저장한다.
-// 평문 비밀번호·전체 이메일·기타 개인식별자는 절대 저장하지 않는다.
+// 어떤 경우에도:
+//  - 평문 비밀번호·전체 이메일·기타 개인식별자는 절대 저장하지 않는다.
+//  - 계정은 항상 마스킹(jo***@domain)으로만 저장한다.
+//  - 다크웹 마켓/포럼을 직접 크롤링하지 않고 합법 유출 인텔리전스 API 만 사용한다.
 //
-// API 키가 없으면 페이지가 비지 않도록 "데모 데이터"(isDemo=true)를 생성한다.
-// 실제 운영에서는 HIBP_API_KEY 를 .env.local / GitHub Secret 에 등록하면 실데이터로 전환된다.
+// 출력:
+//  - data/security/latest_breach_scan.json (원본 기록)
+//  - data/security/history/breach_scan_<stamp>.json (이력)
+//  - lib/data/generated/breachMonitor.ts (정적 사이트가 임포트)
+//  - (선택) Supabase breach_findings 테이블 upsert
 
-import { mkdir, readFile, writeFile, readdir } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 
@@ -27,30 +27,32 @@ const securityDir = join(root, "data", "security");
 const historyDir = join(securityDir, "history");
 const generatedFile = join(root, "lib", "data", "generated", "breachMonitor.ts");
 const configFile = join(securityDir, "monitor_config.json");
+const localConfigFile = join(securityDir, "monitor_config.local.json");
 const latestFile = join(securityDir, "latest_breach_scan.json");
 
 const HIBP_API_KEY = process.env.HIBP_API_KEY?.trim();
 const HIBP_BASE = "https://haveibeenpwned.com/api/v3";
-const USER_AGENT = "foreign-resident-finance-dashboard-breach-monitor";
+const XON_BASE = "https://api.xposedornot.com/v1";
+const USER_AGENT = "darkweb-monitor-dashboard-breach-monitor";
 
-// HIBP 노출 항목(영문) → 한글 표시 매핑(미정의는 원문 유지).
+// HIBP/XposedOrNot 노출 항목(영문) → 한글 표시 매핑(미정의는 원문 유지).
 const DATA_CLASS_KO = {
   "Email addresses": "이메일",
-  "Passwords": "비밀번호",
-  "Usernames": "사용자명",
-  "Names": "이름",
+  Passwords: "비밀번호",
+  Usernames: "사용자명",
+  Names: "이름",
   "Phone numbers": "전화번호",
   "Physical addresses": "주소",
   "IP addresses": "IP 주소",
   "Dates of birth": "생년월일",
-  "Genders": "성별",
+  Genders: "성별",
   "Credit cards": "신용카드",
   "Bank account numbers": "계좌번호",
   "Security questions and answers": "보안 질문/답변",
   "Auth tokens": "인증 토큰",
   "Geographic locations": "위치 정보",
   "Job titles": "직책",
-  "Employers": "직장",
+  Employers: "직장",
   "Social media profiles": "소셜 프로필",
 };
 
@@ -80,9 +82,16 @@ function findingId(domain, alias, breachName) {
   return createHash("sha1").update(`${domain}|${alias}|${breachName}`).digest("hex").slice(0, 12);
 }
 
+function isoToDate(iso) {
+  if (!iso) return "";
+  return String(iso).slice(0, 10); // YYYY-MM-DD
+}
+
 function todayStamp() {
   return new Date().toISOString().replace(/[:.]/g, "-");
 }
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function ensureDirs() {
   await mkdir(securityDir, { recursive: true });
@@ -98,23 +107,35 @@ async function readJson(path, fallback) {
   }
 }
 
+// base config + local override(.gitignore, 실제 이메일 보관) 병합.
+async function loadConfig() {
+  const base = await readJson(configFile, { domains: [], accounts: [], minSeverity: "low" });
+  const local = await readJson(localConfigFile, null);
+  if (!local) return base;
+  return {
+    ...base,
+    ...local,
+    domains: [...new Set([...(base.domains ?? []), ...(local.domains ?? [])])].filter(Boolean),
+    accounts: [...new Set([...(base.accounts ?? []), ...(local.accounts ?? [])])].filter(Boolean),
+  };
+}
+
+function koDataClasses(list) {
+  return (list ?? []).map((dc) => DATA_CLASS_KO[dc] ?? dc);
+}
+
+// ── HIBP (유료키) ──────────────────────────────────────────────────────────
 async function hibpFetch(path) {
   const res = await fetch(`${HIBP_BASE}${path}`, {
-    headers: {
-      "hibp-api-key": HIBP_API_KEY,
-      "user-agent": USER_AGENT,
-    },
+    headers: { "hibp-api-key": HIBP_API_KEY, "user-agent": USER_AGENT },
   });
   if (res.status === 404) return null; // 유출 없음
-  if (!res.ok) {
-    throw new Error(`HIBP ${path} → HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
-  }
   if (res.status === 204) return null;
+  if (!res.ok) throw new Error(`HIBP ${path} → HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
   return res.json();
 }
 
-// 공개 breaches 메타데이터(키 불필요)로 사건명 → {title, date, dataClasses} 사전 구성.
-async function loadBreachCatalog() {
+async function loadHibpCatalog() {
   try {
     const res = await fetch(`${HIBP_BASE}/breaches`, { headers: { "user-agent": USER_AGENT } });
     if (!res.ok) return new Map();
@@ -123,7 +144,7 @@ async function loadBreachCatalog() {
     for (const b of arr) {
       map.set(b.Name, {
         title: b.Title ?? b.Name,
-        date: b.BreachDate ?? "",
+        date: isoToDate(b.BreachDate),
         dataClasses: Array.isArray(b.DataClasses) ? b.DataClasses : [],
       });
     }
@@ -133,35 +154,90 @@ async function loadBreachCatalog() {
   }
 }
 
-function koDataClasses(list) {
-  return list.map((dc) => DATA_CLASS_KO[dc] ?? dc);
-}
-
-// HIBP 도메인 검색 결과(alias → [breachName...]) → 정규화된 finding 배열.
 function buildFindingsFromDomainMap(domain, aliasMap, catalog, nowIso) {
   const findings = [];
   for (const [alias, breachNames] of Object.entries(aliasMap || {})) {
     for (const breachName of breachNames) {
       const meta = catalog.get(breachName) || { title: breachName, date: "", dataClasses: [] };
-      findings.push({
-        id: findingId(domain, alias, breachName),
-        accountMasked: `${maskLocalPart(alias)}@${domain}`,
-        domain,
-        breachName,
-        breachTitle: meta.title,
-        breachDate: meta.date,
-        dataClasses: koDataClasses(meta.dataClasses),
-        severity: severityForDataClasses(meta.dataClasses),
-        isNew: false,
-        discoveredAt: nowIso,
-      });
+      findings.push(makeFinding(domain, alias, breachName, meta, nowIso));
     }
   }
   return findings;
 }
 
-// ── 데모 데이터(키 미설정 시) ──────────────────────────────────────────────
-// 잘 알려진 유출 사건 메타데이터로 그럴듯한 예시를 생성한다(isDemo=true 로 표시).
+// ── XposedOrNot (무료, 키 불필요, 실데이터) ────────────────────────────────
+// 카탈로그: breachID → { title, date, dataClasses }
+async function loadXonCatalog() {
+  try {
+    const res = await fetch(`${XON_BASE}/breaches`, { headers: { "user-agent": USER_AGENT } });
+    if (!res.ok) return new Map();
+    const body = await res.json();
+    const arr = Array.isArray(body) ? body : body.exposedBreaches ?? [];
+    const map = new Map();
+    for (const b of arr) {
+      map.set(b.breachID, {
+        title: b.breachID,
+        date: isoToDate(b.breachedDate),
+        dataClasses: Array.isArray(b.exposedData) ? b.exposedData : [],
+      });
+    }
+    return map;
+  } catch {
+    return new Map();
+  }
+}
+
+// 계정 1건의 유출 사건명 배열 조회. 유출 없음/오류면 [].
+async function xonCheckEmail(email) {
+  try {
+    const res = await fetch(`${XON_BASE}/check-email/${encodeURIComponent(email)}`, {
+      headers: { "user-agent": USER_AGENT },
+    });
+    if (!res.ok) return [];
+    const body = await res.json();
+    if (body?.Error) return []; // {"Error":"Not found"}
+    // 응답: { breaches: [[name1, name2, ...]] }
+    const nested = body?.breaches;
+    if (Array.isArray(nested) && Array.isArray(nested[0])) return nested[0].filter(Boolean);
+    if (Array.isArray(nested)) return nested.filter((x) => typeof x === "string");
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+async function collectXposedOrNot(accounts, catalog, nowIso) {
+  const findings = [];
+  for (const acct of accounts) {
+    const email = String(acct).trim().toLowerCase();
+    const [alias, domain] = email.split("@");
+    if (!alias || !domain) continue;
+    const names = await xonCheckEmail(email);
+    for (const breachName of names) {
+      const meta = catalog.get(breachName) || { title: breachName, date: "", dataClasses: [] };
+      findings.push(makeFinding(domain, alias, breachName, meta, nowIso));
+    }
+    await sleep(350); // 무료 API 레이트리밋 배려
+  }
+  return findings;
+}
+
+function makeFinding(domain, alias, breachName, meta, nowIso) {
+  return {
+    id: findingId(domain, alias, breachName),
+    accountMasked: `${maskLocalPart(alias)}@${domain}`,
+    domain,
+    breachName,
+    breachTitle: meta.title || breachName,
+    breachDate: meta.date || "",
+    dataClasses: koDataClasses(meta.dataClasses),
+    severity: severityForDataClasses(meta.dataClasses ?? []),
+    isNew: false,
+    discoveredAt: nowIso,
+  };
+}
+
+// ── 데모 데이터(소스 미설정 시) ────────────────────────────────────────────
 function buildDemoFindings(domains, nowIso) {
   const demoBreaches = [
     { name: "LinkedIn", title: "LinkedIn", date: "2012-05-05", dataClasses: ["Email addresses", "Passwords"] },
@@ -174,22 +250,8 @@ function buildDemoFindings(domains, nowIso) {
   const findings = [];
   const domain = domains[0] || "example.com";
   demoAliases.forEach((alias, i) => {
-    // 일부 계정에 1~2개 유출을 배정
     const picks = demoBreaches.slice(i % 3, (i % 3) + 1 + (i % 2));
-    for (const b of picks) {
-      findings.push({
-        id: findingId(domain, alias, b.name),
-        accountMasked: `${maskLocalPart(alias)}@${domain}`,
-        domain,
-        breachName: b.name,
-        breachTitle: b.title,
-        breachDate: b.date,
-        dataClasses: koDataClasses(b.dataClasses),
-        severity: severityForDataClasses(b.dataClasses),
-        isNew: false,
-        discoveredAt: nowIso,
-      });
-    }
+    for (const b of picks) findings.push(makeFinding(domain, alias, b.name, b, nowIso));
   });
   return findings;
 }
@@ -246,6 +308,7 @@ async function loadSupabase(scan) {
       breach_date: f.breachDate || null,
       data_classes: f.dataClasses,
       severity: f.severity,
+      is_new: f.isNew,
       discovered_at: f.discoveredAt,
     }));
     if (rows.length === 0) return;
@@ -260,7 +323,7 @@ async function loadSupabase(scan) {
       body: JSON.stringify(rows),
     });
     if (res.ok) console.log(`[supabase] breach_findings upsert ${rows.length}행`);
-    else console.warn(`[supabase] 적재 실패 HTTP ${res.status} (테이블 미생성일 수 있음 — 008 마이그레이션 확인)`);
+    else console.warn(`[supabase] 적재 실패 HTTP ${res.status} (테이블 미생성일 수 있음 — 002 마이그레이션 확인)`);
   } catch (err) {
     console.warn(`[supabase] 적재 건너뜀: ${err.message}`);
   }
@@ -269,8 +332,9 @@ async function loadSupabase(scan) {
 async function main() {
   await ensureDirs();
   const nowIso = new Date().toISOString();
-  const config = await readJson(configFile, { domains: [], extraAccounts: [], minSeverity: "low" });
+  const config = await loadConfig();
   const domains = Array.isArray(config.domains) ? config.domains.filter(Boolean) : [];
+  const accounts = Array.isArray(config.accounts) ? config.accounts.filter(Boolean) : [];
 
   const previous = await readJson(latestFile, null);
   const prevIds = new Set((previous?.findings ?? []).map((f) => f.id));
@@ -279,28 +343,20 @@ async function main() {
   let findings = [];
   let status = "ok";
   let isDemo = false;
-  let source = "Have I Been Pwned (도메인 검색 API)";
+  let source;
   let note;
 
-  if (!HIBP_API_KEY) {
-    isDemo = true;
-    status = "no_api_key";
-    source = "데모 데이터 (HIBP_API_KEY 미설정)";
-    note =
-      "HIBP_API_KEY 가 설정되지 않아 예시(데모) 데이터를 표시합니다. " +
-      ".env.local 또는 GitHub Secret 에 HIBP_API_KEY 를 등록하고 HIBP 대시보드에서 도메인 소유를 검증하면 실제 유출 데이터로 전환됩니다.";
-    findings = buildDemoFindings(domains, nowIso);
-    console.log("[monitor] HIBP_API_KEY 미설정 → 데모 데이터 생성");
-  } else {
+  if (HIBP_API_KEY) {
+    // (1) HIBP 도메인 전수 검색
+    source = "Have I Been Pwned (도메인 검색 API)";
     try {
-      const catalog = await loadBreachCatalog();
+      const catalog = await loadHibpCatalog();
       for (const domain of domains) {
         console.log(`[monitor] HIBP 도메인 검색: ${domain}`);
         const aliasMap = await hibpFetch(`/breacheddomain/${encodeURIComponent(domain)}`);
         findings.push(...buildFindingsFromDomainMap(domain, aliasMap, catalog, nowIso));
       }
-      // 개별 추가 계정(extraAccounts)도 조회
-      for (const acct of config.extraAccounts ?? []) {
+      for (const acct of accounts) {
         const [alias, domain] = String(acct).split("@");
         if (!alias || !domain) continue;
         const breaches = await hibpFetch(`/breachedaccount/${encodeURIComponent(acct)}?truncateResponse=true`);
@@ -312,18 +368,42 @@ async function main() {
       status = "error";
       note = `HIBP 조회 실패: ${err.message}`;
       console.error(`[monitor] ${note}`);
-      // 실패 시 직전 결과를 보존(회귀 방지)
       if (previous?.findings?.length) {
         findings = previous.findings.map((f) => ({ ...f, isNew: false }));
         source = previous.source;
       }
     }
+  } else if (accounts.length) {
+    // (2) 무료 XposedOrNot 계정별 조회(실데이터)
+    source = "XposedOrNot (계정별 유출 조회, 무료)";
+    try {
+      const catalog = await loadXonCatalog();
+      console.log(`[monitor] XposedOrNot 계정 ${accounts.length}건 조회`);
+      findings = await collectXposedOrNot(accounts, catalog, nowIso);
+      console.log(`[monitor] 유출 항목 ${findings.length}건 발견`);
+    } catch (err) {
+      status = "error";
+      note = `XposedOrNot 조회 실패: ${err.message}`;
+      console.error(`[monitor] ${note}`);
+      if (previous?.findings?.length) {
+        findings = previous.findings.map((f) => ({ ...f, isNew: false }));
+        source = previous.source;
+      }
+    }
+  } else {
+    // (3) 데모
+    isDemo = true;
+    status = "no_source";
+    source = "데모 데이터 (모니터링 대상 미설정)";
+    note =
+      "HIBP_API_KEY 또는 모니터링 대상 계정(accounts)이 설정되지 않아 예시(데모) 데이터를 표시합니다. " +
+      "data/security/monitor_config.local.json 에 회사 계정 이메일을 넣으면(무료 XposedOrNot) 실데이터로 전환됩니다.";
+    findings = buildDemoFindings(domains, nowIso);
+    console.log("[monitor] 소스 미설정 → 데모 데이터 생성");
   }
 
   // 신규 표시 (실데이터 한정 — 데모는 항상 false)
-  for (const f of findings) {
-    f.isNew = !isDemo && !prevIds.has(f.id);
-  }
+  for (const f of findings) f.isNew = !isDemo && !prevIds.has(f.id);
   findings = sortFindings(findings);
 
   const summary = summarize(findings, domains);
@@ -332,17 +412,7 @@ async function main() {
     { scannedAt: nowIso, total: summary.total, newCount: summary.newCount },
   ];
 
-  const scan = {
-    generatedAt: nowIso,
-    source,
-    status,
-    isDemo,
-    domains,
-    findings,
-    summary,
-    history,
-    note,
-  };
+  const scan = { generatedAt: nowIso, source, status, isDemo, domains, findings, summary, history, note };
 
   await writeFile(latestFile, JSON.stringify(scan, null, 2), "utf8");
   await writeFile(join(historyDir, `breach_scan_${todayStamp()}.json`), JSON.stringify(scan, null, 2), "utf8");

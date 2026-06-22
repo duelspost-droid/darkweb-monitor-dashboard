@@ -11,7 +11,8 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "security:scan": "node scripts/monitor_breaches.mjs"
+    "security:scan": "node scripts/monitor_breaches.mjs",
+    "supabase:pull": "node scripts/pull_from_supabase.mjs"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",

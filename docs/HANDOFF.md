@@ -27,6 +27,26 @@
 
 ## 3. 작업 이력 (세션별)
 
+### 2026-06-22 세션 (opus, 로컬) — Supabase 백엔드 + 실데이터 전환
+사용자 지시: "백엔드를 supabase로 구축해서 매일 자정에 유출 정보를 긁어서 대시보드에 보여줘. 실데이터를 긁어와."
+
+결정(사용자 선택): 실데이터 소스 = **무료 XposedOrNot**(계정별), 스케줄 = **Supabase Edge Function + pg_cron**, Supabase 자격증명 = **owner가 프로젝트 생성 후 키 전달**.
+
+구현:
+- **실데이터 소스 추가**: `scripts/monitor_breaches.mjs` 가 이제 (1)HIBP_API_KEY 있으면 도메인 검색 → (2)`accounts` 있으면 무료 **XposedOrNot `/v1/check-email`** 계정별 조회(키 불필요, 실데이터) → (3)둘 다 없으면 데모, 순으로 동작. 로컬 검증 완료: **실제 199건**(test@example.com) 렌더, `isDemo:false`.
+- 모니터링 대상 이메일은 `data/security/monitor_config.local.json`(**.gitignore**, 개인정보)에 `accounts` 로 둔다. base `monitor_config.json` 엔 domains/빈 accounts 만.
+- **Supabase 마이그레이션 002**: breach_findings 보강 컬럼(is_new, password_risk, industry, reference_url, breach_logo, last_scan_tag) + updated_at 트리거 + **scan_runs** 이력 테이블(RLS: 공개 읽기/service_role 쓰기).
+- **Edge Function** `supabase/functions/scan-breaches/index.ts` (Deno): XposedOrNot/HIBP 수집 → breach_findings upsert(+stale 정리: last_scan_tag) → scan_runs 기록. Node 스캐너와 동일 로직.
+- **pg_cron 003**: 매일 **15:00 UTC(=자정 KST)** Edge Function 호출. 시크릿(project_url·service_role_key)은 **Vault** 에 저장(SQL에 평문 미포함).
+- **대시보드 동기화**: `scripts/pull_from_supabase.mjs`(`npm run supabase:pull`) 가 Supabase→`lib/data/generated/breachMonitor.ts` 갱신. `.github/workflows/deploy.yml` 을 **15:30 UTC** 로 바꾸고 스캔 대신 pull→빌드→배포. Supabase 미설정 시 조용히 스킵.
+- `supabase/config.toml`, `.env.example`(NEXT_PUBLIC_*·MONITORED_*), `tsconfig.json`(supabase/functions 제외) 추가/수정.
+
+검증: `npm run typecheck` ✅ · `npm run security:scan`(실데이터 199건) ✅ · `--webpack` 정적 export 빌드 ✅ · 대시보드 실데이터 렌더 ✅.
+
+**남은 owner 작업(자격증명 필요)**: 8절 참고 — Supabase 프로젝트 생성 → 키 전달 → 마이그레이션/함수 배포/Vault/cron 설정.
+
+> ⚠️ **로컬 빌드/실행은 `--webpack` 필수** — Codex.app 번들 node 로 설치한 `@next/swc-darwin-arm64` 가 코드서명 Team ID 불일치로 dlopen 거부 → Turbopack(네이티브 필수) 실패. `npm run dev -- --webpack`, `npm run build -- --webpack`. CI(정식 node)에선 Turbopack 정상.
+
 ### 2026-06-21 세션 (opus, 리모트 환경)
 사용자 지시 흐름:
 1. "다크웹을 매일 검색해서 회사 계정 유출된 거 찾아 웹에 기록" → 기능 설계.
@@ -83,6 +103,34 @@ npm run typecheck && npm run build
    { "domains": ["jbfg.com"], "extraAccounts": [], "minSeverity": "low" }
    ```
 5. `npm run security:scan` 재실행 → `isDemo:false` 실데이터로 전환.
+
+## 5-B. Supabase 백엔드 배포 절차 (owner — 자격증명 필요)
+
+> 코드는 모두 작성됨. 아래는 자격증명이 있어야 하는 배포 단계.
+
+1. **프로젝트 생성**: app.supabase.com → New project. `Project URL`, `anon key`, `service_role key` 확보.
+2. **CLI 링크 + 마이그레이션**:
+   ```bash
+   export PATH=/Users/hk/.local/bin:$PATH
+   supabase login                                  # 또는 SUPABASE_ACCESS_TOKEN
+   supabase link --project-ref <ref>
+   supabase db push                                # 001·002·003 적용
+   ```
+3. **Edge Function 시크릿 + 배포**:
+   ```bash
+   supabase secrets set MONITORED_EMAILS="a@jbfg.com,b@jbfg.com"   # 무료 경로(실계정)
+   # (유료 시) supabase secrets set HIBP_API_KEY=... MONITORED_DOMAINS="jbfg.com"
+   supabase functions deploy scan-breaches
+   ```
+4. **Vault 시크릿(cron 용, 1회)** — Studio SQL Editor:
+   ```sql
+   select vault.create_secret('https://<ref>.supabase.co', 'project_url');
+   select vault.create_secret('<SERVICE_ROLE_KEY>',        'service_role_key');
+   ```
+   (003 마이그레이션이 cron 잡 `daily-breach-scan` 을 15:00 UTC 로 등록 — 자정 KST.)
+5. **수동 1회 실행/검증**: `supabase functions invoke scan-breaches` → `breach_findings`·`scan_runs` 적재 확인.
+6. **대시보드 연결**: GitHub Secrets 에 `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` 등록 →
+   deploy.yml 이 매일 15:30 UTC pull→빌드→Pages 배포. 로컬 확인은 `.env.local` 에 같은 값 두고 `npm run supabase:pull`.
 
 ## 6. 다음 작업 TODO (우선순위)
 

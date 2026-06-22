@@ -52,7 +52,7 @@ export default function SecurityPage() {
       <PageHero
         kicker="보안 · 다크웹 유출 모니터링"
         title="회사 계정 유출 모니터링"
-        description="매일 자동으로 유출 인텔리전스(Have I Been Pwned)를 조회해 회사 도메인 계정이 다크웹·유출 데이터셋에 노출됐는지 추적합니다. 계정은 마스킹된 형태로만 기록합니다."
+        description="매일 자정 자동으로 유출 인텔리전스 API를 조회해 회사 계정이 다크웹·유출 데이터셋에 노출됐는지 추적합니다. 계정은 마스킹된 형태로만 기록합니다."
         right={
           <span className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-semibold text-white">
             <CalendarClock size={13} aria-hidden /> 최근 스캔 {fmtDate(scan.generatedAt)}
@@ -242,15 +242,15 @@ export default function SecurityPage() {
               <ShieldCheck size={16} className="mt-0.5 shrink-0 text-teal-600" aria-hidden />
               <span>
                 다크웹 마켓·포럼을 직접 크롤링하지 않고, 검증된 유출 인텔리전스 API
-                (Have I Been Pwned 도메인 검색)로 <strong>유출 사실만</strong> 조회합니다. 평문
+                (XposedOrNot·Have I Been Pwned)로 <strong>유출 사실만</strong> 조회합니다. 평문
                 비밀번호는 받지 않습니다.
               </span>
             </li>
             <li className="flex gap-2">
               <ShieldCheck size={16} className="mt-0.5 shrink-0 text-teal-600" aria-hidden />
               <span>
-                매일 자동 배치(<code className="rounded bg-slate-100 px-1">npm run security:scan</code>)로
-                갱신되며, 결과는 마스킹된 계정으로만 기록됩니다.
+                매일 자정(KST) Supabase Edge Function 자동 배치로 갱신되며, 결과는 Supabase에
+                마스킹된 계정으로만 기록됩니다.
               </span>
             </li>
             <li className="flex gap-2">
