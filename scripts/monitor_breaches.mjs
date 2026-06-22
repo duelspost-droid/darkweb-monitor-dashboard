@@ -34,7 +34,26 @@ const HIBP_API_KEY = process.env.HIBP_API_KEY?.trim();
 const HIBP_BASE = "https://haveibeenpwned.com/api/v3";
 const XON_BASE = "https://api.xposedornot.com/v1";
 const CAVALIER_BASE = "https://cavalier.hudsonrock.com/api/json/v2/osint-tools";
+const LEAKCHECK_BASE = "https://leakcheck.io";
 const USER_AGENT = "darkweb-monitor-dashboard-breach-monitor";
+
+// 보조 소스 — 키-게이트(있으면 사용, 없으면 조용히 skip). Hudson Rock OSINT 는 무료라 토글로만 제어.
+const INTELX_API_KEY = process.env.INTELX_API_KEY?.trim();
+const INTELX_HOST = process.env.INTELX_API_HOST?.trim() || "https://2.intelx.io";
+const INTELX_BUCKETS = (process.env.INTELX_BUCKETS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+const LEAKCHECK_API_KEY = process.env.LEAKCHECK_API_KEY?.trim();
+const HUDSONROCK_OSINT = (process.env.HUDSONROCK_OSINT_ENABLED ?? "1") !== "0";
+
+// LeakCheck 노출 필드(카테고리) → 한글. 값 자체는 저장하지 않는다(분류만).
+const LEAK_FIELD_KO = {
+  password: "비밀번호", username: "사용자명", email: "이메일", phone: "전화번호",
+  dob: "생년월일", ssn: "주민번호", address: "주소", zip: "우편번호", ip: "IP 주소",
+  first_name: "이름", last_name: "이름", name: "이름",
+};
+function mapLeakFields(fields) {
+  const out = [...new Set((fields ?? []).map((f) => LEAK_FIELD_KO[f]).filter(Boolean))];
+  return out.length ? out : ["유출 기록"];
+}
 
 // HIBP/XposedOrNot 노출 항목(영문) → 한글 표시 매핑(미정의는 원문 유지).
 const DATA_CLASS_KO = {
@@ -94,6 +113,27 @@ function todayStamp() {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// 견고한 JSON fetch: 429/5xx 는 Retry-After/지수 백오프로 재시도. 실패해도 throw 안 함.
+async function fetchJson(url, { headers = {}, method = "GET", body } = {}, { retries = 2, baseDelay = 800 } = {}) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await fetch(url, { method, headers: { "user-agent": USER_AGENT, ...headers }, body });
+      if ((res.status === 429 || res.status >= 500) && attempt < retries) {
+        const ra = Number(res.headers.get("retry-after"));
+        await sleep(ra ? ra * 1000 : baseDelay * (attempt + 1));
+        continue;
+      }
+      let data = null;
+      try { data = await res.json(); } catch { /* 비JSON/빈 본문 */ }
+      return { ok: res.ok, status: res.status, data };
+    } catch (err) {
+      if (attempt < retries) { await sleep(baseDelay * (attempt + 1)); continue; }
+      return { ok: false, status: 0, data: null, error: err };
+    }
+  }
+  return { ok: false, status: 0, data: null };
+}
+
 async function ensureDirs() {
   await mkdir(securityDir, { recursive: true });
   await mkdir(historyDir, { recursive: true });
@@ -127,13 +167,22 @@ function koDataClasses(list) {
 
 // ── HIBP (유료키) ──────────────────────────────────────────────────────────
 async function hibpFetch(path) {
-  const res = await fetch(`${HIBP_BASE}${path}`, {
-    headers: { "hibp-api-key": HIBP_API_KEY, "user-agent": USER_AGENT },
-  });
-  if (res.status === 404) return null; // 유출 없음
-  if (res.status === 204) return null;
-  if (!res.ok) throw new Error(`HIBP ${path} → HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
-  return res.json();
+  // 도메인 전수 검색 대비: 429(레이트리밋)는 Retry-After 만큼 대기 후 재시도.
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const res = await fetch(`${HIBP_BASE}${path}`, {
+      headers: { "hibp-api-key": HIBP_API_KEY, "user-agent": USER_AGENT },
+    });
+    if (res.status === 404 || res.status === 204) return null; // 유출 없음
+    if (res.status === 429) {
+      const ra = Number(res.headers.get("retry-after")) || 2 * (attempt + 1);
+      console.warn(`[monitor] HIBP 429 — ${ra}s 대기 후 재시도 (${attempt + 1}/4)`);
+      await sleep(ra * 1000);
+      continue;
+    }
+    if (!res.ok) throw new Error(`HIBP ${path} → HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
+    return res.json();
+  }
+  throw new Error(`HIBP ${path} → 429 반복(레이트리밋) — 재시도 한도 초과`);
 }
 
 async function loadHibpCatalog() {
@@ -239,6 +288,25 @@ function makeFinding(domain, alias, breachName, meta, nowIso) {
   };
 }
 
+// 카탈로그 없이 보조 소스(Hudson Rock 계정별·IntelX·LeakCheck)가 직접 finding 을 만들 때 사용.
+// dataClasses 는 이미 한글 분류, severity 도 직접 지정. idSeed 로 finding_id 충돌 방지(소스별 레코드).
+function makeRawFinding({ domain, alias, breachName, breachTitle, breachDate, dataClassesKo, severity, source }, nowIso, idSeed = "") {
+  const aliasKey = alias || "*";
+  return {
+    id: findingId(domain, aliasKey, idSeed ? `${breachName}|${idSeed}` : breachName),
+    accountMasked: aliasKey === "*" ? `*@${domain}` : `${maskLocalPart(aliasKey)}@${domain}`,
+    domain,
+    breachName,
+    breachTitle: breachTitle || breachName,
+    breachDate: breachDate || "",
+    dataClasses: dataClassesKo,
+    severity,
+    isNew: false,
+    discoveredAt: nowIso,
+    source,
+  };
+}
+
 // ── Hudson Rock Cavalier (무료, 키 불필요) — 도메인 전수 인포스틸러 감염 ──────
 async function collectCavalier(domains, nowIso) {
   const out = [];
@@ -268,6 +336,170 @@ async function collectCavalier(domains, nowIso) {
     }
   }
   return out;
+}
+
+// ── Hudson Rock 계정별 인포스틸러 (무료) → breach_findings ───────────────────
+// search-by-email 로 모니터링 계정의 인포스틸러 감염을 조회. 민감값(top_passwords·ip·PC명)은
+// 절대 저장하지 않고, 마스킹 계정 + 분류(비밀번호/자격증명/감염) + 카운트만 남긴다.
+async function collectCavalierAccounts(accounts, nowIso) {
+  const findings = [];
+  for (const acct of accounts) {
+    const email = String(acct).trim().toLowerCase();
+    const [alias, domain] = email.split("@");
+    if (!alias || !domain) continue;
+    const r = await fetchJson(`${CAVALIER_BASE}/search-by-email?email=${encodeURIComponent(email)}`);
+    const stealers = Array.isArray(r.data?.stealers) ? r.data.stealers : [];
+    if (stealers.length) {
+      const seen = new Set();
+      let corp = 0, hasPw = false, hasLogin = false, last = "";
+      const families = new Set();
+      for (const s of stealers) {
+        const key = `${s.computer_name}|${s.date_compromised}|${s.ip}`; // 동일 로그 중복 제거
+        if (seen.has(key)) continue;
+        seen.add(key);
+        corp += Number(s.total_corporate_services || 0);
+        if (Array.isArray(s.top_passwords) && s.top_passwords.length) hasPw = true;
+        if (Array.isArray(s.top_logins) && s.top_logins.length) hasLogin = true;
+        if (s.stealer_family) families.add(s.stealer_family);
+        const d = String(s.date_compromised || "").slice(0, 10);
+        if (d > last) last = d;
+      }
+      const dataClasses = [];
+      if (hasLogin) dataClasses.push("자격증명");
+      if (hasPw) dataClasses.push("비밀번호");
+      dataClasses.push("인포스틸러 감염");
+      findings.push(makeRawFinding({
+        domain, alias,
+        breachName: families.size ? `Infostealer (${[...families].join(", ")})` : "Infostealer",
+        breachTitle: `인포스틸러 감염 (${seen.size}대 기기)`,
+        breachDate: last,
+        dataClassesKo: dataClasses,
+        severity: corp > 0 ? "high" : "medium", // 사내 서비스 자격증명 탈취면 high
+        source: "Hudson Rock Cavalier (계정별)",
+      }, nowIso));
+    }
+    await sleep(1000); // 무료 OSINT 공정사용 — ~1 req/s
+  }
+  return findings;
+}
+
+// ── Intelligence X (키-게이트) → breach_findings ────────────────────────────
+// 도메인 전수 유출 레코드. async: 인증확인 → search(term=domain) → result 폴링.
+async function collectIntelx(domains, nowIso) {
+  if (!INTELX_API_KEY) return { findings: [], used: false, count: 0 };
+  const headers = { "x-key": INTELX_API_KEY, "content-type": "application/json" };
+  const info = await fetchJson(`${INTELX_HOST}/authenticate/info`, { headers });
+  if (!info.ok) {
+    console.warn(`[intelx] 인증/크레딧 확인 실패 HTTP ${info.status} — 건너뜀`);
+    return { findings: [], used: false, count: 0 };
+  }
+  const findings = [];
+  for (const domain of domains) {
+    const start = await fetchJson(`${INTELX_HOST}/intelligent/search`, {
+      method: "POST", headers,
+      body: JSON.stringify({
+        term: domain, maxresults: 100, media: 0, sort: 4, timeout: 5,
+        ...(INTELX_BUCKETS.length ? { buckets: INTELX_BUCKETS } : {}),
+      }),
+    });
+    const id = start.data?.id;
+    if (!id || start.data?.status === 2) continue; // 무효 term/쿼터 없음
+    const records = [];
+    for (let i = 0; i < 8; i++) {
+      const r = await fetchJson(`${INTELX_HOST}/intelligent/search/result?id=${encodeURIComponent(id)}&limit=100`, { headers });
+      if (Array.isArray(r.data?.records)) records.push(...r.data.records);
+      const st = r.data?.status;
+      if (st === 1 || st === 2) break; // 1=완료, 2=id 없음
+      await sleep(1200); // 3=준비중 → 백오프 폴링
+    }
+    const seen = new Set();
+    for (const rec of records) {
+      if (seen.has(rec.systemid)) continue;
+      seen.add(rec.systemid);
+      const bucket = String(rec.bucket || "");
+      const name = String(rec.name || bucket || "IntelX record");
+      const severity = /private|credential|combo|dump/i.test(`${bucket} ${name}`)
+        ? "high" : /leak|public/i.test(bucket) ? "medium" : "low";
+      const dataClasses = /combo|dump|cred/i.test(name)
+        ? ["이메일", "비밀번호"] : /paste/i.test(bucket) ? ["페이스트"] : ["유출 기록"];
+      findings.push(makeRawFinding({
+        domain, alias: "*",
+        breachName: name.slice(0, 80),
+        breachTitle: name.slice(0, 120),
+        breachDate: String(rec.date || "").slice(0, 10),
+        dataClassesKo: dataClasses, severity,
+        source: "Intelligence X",
+      }, nowIso, rec.systemid));
+    }
+  }
+  return { findings, used: true, count: findings.length };
+}
+
+// ── LeakCheck → breach_findings ─────────────────────────────────────────────
+// 키 있으면 v2 type=domain(도메인 전수, 평문 password 는 절대 저장 안 함),
+// 없으면 무료 public(?check=) 으로 계정별(roster) 조회. 둘 다 마스킹만 저장.
+async function collectLeakcheck(domains, accounts, nowIso) {
+  if (LEAKCHECK_API_KEY) {
+    const findings = [];
+    for (const domain of domains) {
+      let offset = 0;
+      for (let page = 0; page < 10; page++) {
+        const r = await fetchJson(
+          `${LEAKCHECK_BASE}/api/v2/query/${encodeURIComponent(domain)}?type=domain&limit=100&offset=${offset}`,
+          { headers: { "X-API-Key": LEAKCHECK_API_KEY } },
+        );
+        if (!r.ok) { if (page === 0) console.warn(`[leakcheck] v2 HTTP ${r.status} — 건너뜀`); break; }
+        const result = Array.isArray(r.data?.result) ? r.data.result : [];
+        for (const e of result) {
+          const email = String(e.email || "").toLowerCase();
+          const [alias, dm] = email.includes("@") ? email.split("@") : ["*", domain];
+          const fields = Array.isArray(e.fields) ? e.fields : [];
+          const sev = fields.includes("password") || fields.includes("ssn")
+            ? "high" : fields.includes("dob") || fields.includes("address") ? "medium" : "low";
+          // password 등 평문은 매핑에서 제외 — fields(분류)만 사용.
+          findings.push(makeRawFinding({
+            domain: dm || domain, alias: alias || "*",
+            breachName: e.source?.name || "LeakCheck",
+            breachTitle: e.source?.name || "LeakCheck",
+            breachDate: String(e.source?.breach_date || "").slice(0, 10),
+            dataClassesKo: mapLeakFields(fields), severity: sev,
+            source: "LeakCheck",
+          }, nowIso, email || undefined));
+        }
+        if (result.length < 100) break;
+        offset += 100;
+        await sleep(400);
+      }
+    }
+    return { findings, used: true, count: findings.length, mode: "v2-domain" };
+  }
+  if (accounts.length) {
+    // 무료 public — 도메인 검색 미지원 → 계정별. 응답에 평문 없음(설계상 안전).
+    const findings = [];
+    for (const acct of accounts) {
+      const email = String(acct).trim().toLowerCase();
+      const [alias, domain] = email.split("@");
+      if (!alias || !domain) continue;
+      const r = await fetchJson(`${LEAKCHECK_BASE}/api/public?check=${encodeURIComponent(email)}`);
+      const sources = Array.isArray(r.data?.sources) ? r.data.sources : [];
+      const fields = Array.isArray(r.data?.fields) ? r.data.fields : [];
+      const dataClasses = mapLeakFields(fields);
+      const sev = fields.includes("password") || fields.includes("ssn") ? "high" : "low";
+      for (const src of sources) {
+        findings.push(makeRawFinding({
+          domain, alias,
+          breachName: src.name || "LeakCheck",
+          breachTitle: src.name || "LeakCheck",
+          breachDate: String(src.date || ""),
+          dataClassesKo: dataClasses, severity: sev,
+          source: "LeakCheck (public)",
+        }, nowIso, src.name));
+      }
+      await sleep(1100); // 무료 ~1 req/s
+    }
+    return { findings, used: true, count: findings.length, mode: "public" };
+  }
+  return { findings: [], used: false, count: 0, mode: "" };
 }
 
 // ── 데모 데이터(소스 미설정 시) ────────────────────────────────────────────
@@ -454,11 +686,52 @@ async function main() {
     console.log("[monitor] 소스 미설정 → 데모 데이터 생성");
   }
 
-  // 신규 표시 + 출처 기록 (실데이터 한정 — 데모는 항상 false)
-  for (const f of findings) {
-    f.isNew = !isDemo && !prevIds.has(f.id);
-    f.source = source;
+  // 1차(주) 소스 결과에 출처 라벨 부여 + 건수 기록
+  for (const f of findings) f.source = f.source || source;
+  const primaryCount = findings.length;
+
+  // ── 보조 소스 (실데이터 한정) — 키 있으면/무료면 추가 수집 후 병합 ──────────
+  const provenanceExtra = [];
+  if (!isDemo) {
+    // IntelX (도메인 전수, 키-게이트)
+    if (INTELX_API_KEY && domains.length) {
+      console.log(`[monitor] IntelX 도메인 검색 ${domains.length}건`);
+      const ix = await collectIntelx(domains, nowIso);
+      if (ix.used) {
+        findings.push(...ix.findings);
+        provenanceExtra.push({ name: "Intelligence X", kind: "breach", endpoint: "2.intelx.io /intelligent/search", count: ix.count, scannedAt: nowIso });
+      }
+    }
+    // LeakCheck (키 있으면 도메인 v2, 없으면 무료 public 계정별)
+    if (LEAKCHECK_API_KEY ? domains.length : accounts.length) {
+      console.log(`[monitor] LeakCheck 조회 (${LEAKCHECK_API_KEY ? "v2 도메인" : "public 계정별"})`);
+      const lc = await collectLeakcheck(domains, accounts, nowIso);
+      if (lc.used) {
+        findings.push(...lc.findings);
+        provenanceExtra.push({
+          name: lc.mode === "v2-domain" ? "LeakCheck" : "LeakCheck (public)",
+          kind: "breach",
+          endpoint: lc.mode === "v2-domain" ? "leakcheck.io /api/v2/query?type=domain" : "leakcheck.io /api/public",
+          count: lc.count, scannedAt: nowIso,
+        });
+      }
+    }
+    // Hudson Rock 계정별 인포스틸러 (무료) → breach_findings
+    if (HUDSONROCK_OSINT && accounts.length) {
+      console.log(`[monitor] Hudson Rock 계정별 인포스틸러 ${accounts.length}건`);
+      const hr = await collectCavalierAccounts(accounts, nowIso);
+      if (hr.length) {
+        findings.push(...hr);
+        provenanceExtra.push({ name: "Hudson Rock Cavalier (계정별)", kind: "breach", endpoint: "cavalier.hudsonrock.com /search-by-email", count: hr.length, scannedAt: nowIso });
+      }
+    }
   }
+
+  // 중복 제거 (같은 finding_id 는 먼저 본 것 유지) + 신규 표시 + 정렬
+  const byId = new Map();
+  for (const f of findings) if (!byId.has(f.id)) byId.set(f.id, f);
+  findings = [...byId.values()];
+  for (const f of findings) f.isNew = !isDemo && !prevIds.has(f.id);
   findings = sortFindings(findings);
 
   // 다크웹 인포스틸러 감염 — 도메인 전수 (Hudson Rock Cavalier, 무료)
@@ -475,10 +748,11 @@ async function main() {
     {
       name: source,
       kind: "breach",
-      endpoint: HIBP_API_KEY ? "haveibeenpwned.com /api/v3/breacheddomain" : "api.xposedornot.com /v1/check-email",
-      count: findings.length,
+      endpoint: HIBP_API_KEY ? "haveibeenpwned.com /api/v3/breacheddomain" : (accounts.length ? "api.xposedornot.com /v1/check-email" : "demo"),
+      count: primaryCount,
       scannedAt: nowIso,
     },
+    ...provenanceExtra,
   ];
   if (infostealer.length) {
     sources.push({

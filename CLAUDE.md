@@ -7,8 +7,10 @@
 - 이름: **다크웹 유출 모니터링 대시보드** (`darkweb-monitor-dashboard`)
 - 목적: 회사 도메인 계정의 다크웹·유출 노출을 매일 자동 조회 → 웹 대시보드에 마스킹 기록
 - 스택: Next.js 16 (App Router) · TypeScript · Tailwind CSS · lucide-react
-- 데이터 방식: **합법 유출 인텔리전스 API** — 무료 **XposedOrNot**(계정별) 또는 HIBP(도메인, 유료키).
-  다크웹 직접 크롤링 금지. 평문 비밀번호 미수신.
+- 데이터 방식: **합법 유출 인텔리전스 API** (다크웹 직접 크롤링 금지, 평문 비밀번호 미수신).
+  - breach(계정 유출): **XposedOrNot**(무료, 계정별) · **HIBP**(유료키, 도메인 전수 — 임직원 "전수"는 이 경로) · **IntelX**(키-게이트, 도메인) · **LeakCheck**(키=v2 도메인/무키=public 계정별).
+  - infostealer: **Hudson Rock Cavalier** — `search-by-domain`(무료, 도메인 집계) + `search-by-email`(무료, 계정별 → breach_findings, 민감값 미저장·분류만).
+  - 보조 소스는 키 있으면 사용/없으면 skip, 결과는 finding 별 `source` 라벨 + `sources[]` provenance 기록. 환경변수는 `.env.example` (C)/(D) 참고.
 - 백엔드: **Supabase** (breach_findings·scan_runs). 매일 자정(KST) Edge Function+pg_cron 으로 수집.
 
 ## 핵심 파일 (수정 위치)
