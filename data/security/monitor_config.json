@@ -1,6 +1,12 @@
 {
-  "$comment": "다크웹/유출 모니터링 대상. (1) HIBP_API_KEY 가 있으면 domains 를 도메인 전수 검색. (2) 키가 없으면 무료 XposedOrNot 로 accounts(개별 이메일)를 조회. 실제 이메일은 여기 대신 monitor_config.local.json(.gitignore) 에 넣으면 커밋되지 않는다. 저장은 항상 마스킹만.",
-  "domains": ["jbfg.com"],
+  "$comment": "모니터링 대상 도메인 = JB금융그룹 4개 계열사. HIBP_API_KEY 가 있으면 domains 를 도메인 전수 검색(소유검증 필요). 없으면 무료 XposedOrNot 로 accounts(개별 이메일, monitor_config.local.json) 조회. 저장은 항상 마스킹만.",
+  "institutions": {
+    "jbfg.com": "JB금융지주",
+    "jbbank.co.kr": "전북은행",
+    "kjbank.com": "광주은행",
+    "wooricap.com": "JB우리캐피탈"
+  },
+  "domains": ["jbfg.com", "jbbank.co.kr", "kjbank.com", "wooricap.com"],
   "accounts": [],
   "minSeverity": "low"
 }

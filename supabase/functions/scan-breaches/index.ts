@@ -227,7 +227,7 @@ Deno.serve(async (req) => {
     scanned_at: nowIso, source, status, is_demo: false,
     total: findings.length, new_count: newCount,
     critical: summary.critical, high: summary.high, medium: summary.medium, low: summary.low,
-    domains: HIBP_API_KEY ? MONITORED_DOMAINS : [...new Set(findings.map((f) => f.domain))],
+    domains: [...new Set([...MONITORED_DOMAINS, ...findings.map((f) => f.domain)])],
     note,
   });
 

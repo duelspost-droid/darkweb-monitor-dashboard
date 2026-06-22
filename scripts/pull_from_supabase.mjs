@@ -38,7 +38,7 @@ async function main() {
   );
   // 스캔 이력 (최근 30건)
   const runs = await rest(
-    "scan_runs?select=scanned_at,total,new_count,source,status,is_demo&order=scanned_at.desc&limit=30"
+    "scan_runs?select=scanned_at,total,new_count,source,status,is_demo,domains,note&order=scanned_at.desc&limit=30"
   );
 
   const findings = rows.map((r) => ({
@@ -70,7 +70,8 @@ async function main() {
   }
 
   const latestRun = runs[0];
-  const domains = [...byDomainMap.keys()];
+  // 설정된 모니터링 도메인(스캔 기록) 우선, 없으면 발견된 도메인.
+  const domains = latestRun?.domains?.length ? latestRun.domains : [...byDomainMap.keys()];
   const history = [...runs]
     .reverse()
     .map((r) => ({ scannedAt: r.scanned_at, total: r.total, newCount: r.new_count }));
