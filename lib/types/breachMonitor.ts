@@ -21,6 +21,29 @@ export interface BreachFinding {
   // 직전 스캔 대비 새로 발견된 항목 여부
   isNew: boolean;
   discoveredAt: string;
+  // 수집 출처 (예: "XposedOrNot", "Have I Been Pwned")
+  source: string;
+}
+
+// 다크웹 인포스틸러(악성코드) 감염 — 도메인 전수 집계 (Hudson Rock Cavalier).
+export interface InfostealerFinding {
+  domain: string;
+  source: string; // "Hudson Rock Cavalier"
+  total: number; // 도메인 관련 감염 총계
+  employees: number; // 임직원(도메인 메일) 감염
+  users: number; // 사용자/고객 감염
+  thirdParties: number; // 서드파티 감염
+  affectedUrls: { url: string; type: string; occurrence: number }[]; // 영향받은 URL Top
+  scannedAt: string;
+}
+
+// 수집 출처 기록 (provenance) — 어떤 소스에서, 언제, 몇 건 수집했는지.
+export interface SourceRecord {
+  name: string; // "XposedOrNot (계정별 유출 조회)"
+  kind: "breach" | "infostealer"; // 데이터 종류
+  endpoint: string; // 호출한 API 엔드포인트
+  count: number; // 수집 건수
+  scannedAt: string;
 }
 
 export interface BreachScanSummary {
@@ -48,4 +71,8 @@ export interface BreachScan {
   summary: BreachScanSummary;
   history: BreachScanHistoryPoint[];
   note?: string;
+  // 다크웹 인포스틸러 감염 (도메인 전수, Hudson Rock Cavalier)
+  infostealer?: InfostealerFinding[];
+  // 수집 출처 기록 (provenance)
+  sources?: SourceRecord[];
 }

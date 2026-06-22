@@ -34,11 +34,15 @@ const SEVERITY_RANK = { low: 0, medium: 1, high: 2, critical: 3 };
 async function main() {
   // 유출 항목 (severity desc, breach_date desc)
   const rows = await rest(
-    "breach_findings?select=finding_id,account_masked,domain,breach_name,breach_title,breach_date,data_classes,severity,is_new,discovered_at&order=severity.desc,breach_date.desc"
+    "breach_findings?select=finding_id,account_masked,domain,breach_name,breach_title,breach_date,data_classes,severity,is_new,discovered_at,source&order=severity.desc,breach_date.desc"
   );
   // 스캔 이력 (최근 30건)
   const runs = await rest(
-    "scan_runs?select=scanned_at,total,new_count,source,status,is_demo,domains,note&order=scanned_at.desc&limit=30"
+    "scan_runs?select=scanned_at,total,new_count,source,status,is_demo,domains,sources,note&order=scanned_at.desc&limit=30"
+  );
+  // 인포스틸러(도메인 전수)
+  const infRows = await rest(
+    "infostealer_findings?select=domain,source,total,employees,users,third_parties,affected_urls,scanned_at&order=total.desc"
   );
 
   const findings = rows.map((r) => ({
@@ -52,6 +56,7 @@ async function main() {
     severity: r.severity,
     isNew: !!r.is_new,
     discoveredAt: r.discovered_at,
+    source: r.source ?? "",
   }));
   findings.sort((a, b) => {
     if (a.isNew !== b.isNew) return a.isNew ? -1 : 1;
@@ -91,6 +96,17 @@ async function main() {
     },
     history,
     note: latestRun?.note ?? undefined,
+    infostealer: infRows.map((i) => ({
+      domain: i.domain,
+      source: i.source,
+      total: i.total,
+      employees: i.employees,
+      users: i.users,
+      thirdParties: i.third_parties,
+      affectedUrls: i.affected_urls ?? [],
+      scannedAt: i.scanned_at,
+    })),
+    sources: latestRun?.sources ?? [],
   };
 
   await mkdir(join(root, "lib", "data", "generated"), { recursive: true });

@@ -25,6 +25,7 @@ const MONITORED_DOMAINS = (Deno.env.get("MONITORED_DOMAINS") ?? "")
 
 const HIBP_BASE = "https://haveibeenpwned.com/api/v3";
 const XON_BASE = "https://api.xposedornot.com/v1";
+const CAVALIER_BASE = "https://cavalier.hudsonrock.com/api/json/v2/osint-tools";
 const UA = "darkweb-monitor-dashboard-breach-monitor";
 
 const DATA_CLASS_KO: Record<string, string> = {
@@ -109,10 +110,35 @@ async function hibpDomain(domain: string): Promise<Record<string, string[]> | nu
   return res.json();
 }
 
+// ── Hudson Rock Cavalier (무료, 키 불필요) — 도메인 전수 인포스틸러 감염 ──────
+interface Infostealer {
+  domain: string; source: string; total: number; employees: number; users: number;
+  third_parties: number; affected_urls: { url: string; type: string; occurrence: number }[];
+  scanned_at: string;
+}
+async function collectCavalier(domains: string[], nowIso: string): Promise<Infostealer[]> {
+  const out: Infostealer[] = [];
+  for (const domain of domains) {
+    try {
+      const res = await fetch(`${CAVALIER_BASE}/search-by-domain?domain=${encodeURIComponent(domain)}`, { headers: { "user-agent": UA } });
+      if (!res.ok) continue;
+      const d = await res.json();
+      const urls = (d?.data?.all_urls ?? []).slice(0, 10).map((u: { url: string; type: string; occurrence: number }) => ({ url: u.url, type: u.type, occurrence: u.occurrence }));
+      out.push({
+        domain, source: "Hudson Rock Cavalier",
+        total: d.total ?? 0, employees: d.employees ?? 0, users: d.users ?? 0,
+        third_parties: d.third_parties ?? 0, affected_urls: urls, scanned_at: nowIso,
+      });
+      await sleep(300);
+    } catch { /* skip domain */ }
+  }
+  return out;
+}
+
 interface Finding {
   finding_id: string; account_masked: string; domain: string; breach_name: string;
   breach_title: string; breach_date: string | null; data_classes: string[]; severity: string;
-  password_risk?: string; industry?: string; reference_url?: string; breach_logo?: string;
+  password_risk?: string; industry?: string; reference_url?: string; breach_logo?: string; source?: string;
 }
 async function mkFinding(domain: string, alias: string, name: string, meta: Catalog[string], nowIso: string): Promise<Finding & { is_new: boolean; discovered_at: string }> {
   return {
@@ -156,6 +182,15 @@ async function sbInsertScanRun(run: unknown) {
     method: "POST", headers: { ...sbHeaders, Prefer: "return=minimal" }, body: JSON.stringify(run),
   });
   if (!res.ok) console.warn(`scan_run insert HTTP ${res.status}`);
+}
+async function sbUpsertInfostealer(rows: Infostealer[]) {
+  if (!rows.length) return;
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/infostealer_findings?on_conflict=domain`, {
+    method: "POST",
+    headers: { ...sbHeaders, Prefer: "resolution=merge-duplicates,return=minimal" },
+    body: JSON.stringify(rows),
+  });
+  if (!res.ok) console.warn(`infostealer upsert HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
 }
 
 Deno.serve(async (req) => {
@@ -206,10 +241,10 @@ Deno.serve(async (req) => {
     note = `조회 실패: ${(err as Error).message}`;
   }
 
-  // is_new 계산 (정상 스캔 한정)
+  // is_new 계산 + 출처 기록 (정상 스캔 한정)
   if (status === "ok") {
     const existing = await sbGetExistingIds();
-    for (const f of findings) f.is_new = !existing.has(f.finding_id);
+    for (const f of findings) { f.is_new = !existing.has(f.finding_id); f.source = source; }
   }
 
   // 적재 (정상 스캔만 DB 갱신; 오류 시 기존 데이터 보존)
@@ -219,19 +254,37 @@ Deno.serve(async (req) => {
     await sbDeleteStale(scanTag);
   }
 
+  // 다크웹 인포스틸러 — 도메인 전수 (Hudson Rock Cavalier, 무료) — breach 오류와 무관하게 시도
+  let infostealer: Infostealer[] = [];
+  const cavalierDomains = MONITORED_DOMAINS.length ? MONITORED_DOMAINS : [...new Set(findings.map((f) => f.domain))];
+  if (cavalierDomains.length) {
+    infostealer = await collectCavalier(cavalierDomains, nowIso);
+    await sbUpsertInfostealer(infostealer);
+  }
+
   const summary = { critical: 0, high: 0, medium: 0, low: 0 };
   let newCount = 0;
   for (const f of findings) { summary[f.severity as keyof typeof summary]++; if (f.is_new) newCount++; }
+
+  // 수집 출처 기록 (provenance)
+  const infTotal = infostealer.reduce((s, i) => s + i.total, 0);
+  const sources = [
+    { name: source, kind: "breach", endpoint: HIBP_API_KEY ? "haveibeenpwned.com /api/v3/breacheddomain" : "api.xposedornot.com /v1/check-email", count: findings.length, scannedAt: nowIso },
+  ];
+  if (infostealer.length) {
+    sources.push({ name: "Hudson Rock Cavalier", kind: "infostealer", endpoint: "cavalier.hudsonrock.com /search-by-domain", count: infTotal, scannedAt: nowIso });
+  }
 
   await sbInsertScanRun({
     scanned_at: nowIso, source, status, is_demo: false,
     total: findings.length, new_count: newCount,
     critical: summary.critical, high: summary.high, medium: summary.medium, low: summary.low,
     domains: [...new Set([...MONITORED_DOMAINS, ...findings.map((f) => f.domain)])],
-    note,
+    sources, note,
   });
 
   return new Response(JSON.stringify({
-    ok: status !== "error", status, source, total: findings.length, newCount, summary, note,
+    ok: status !== "error", status, source, total: findings.length, newCount, summary,
+    infostealer: { domains: infostealer.length, total: infTotal }, sources, note,
   }), { headers: { "Content-Type": "application/json" } });
 });

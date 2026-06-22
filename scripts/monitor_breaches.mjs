@@ -33,6 +33,7 @@ const latestFile = join(securityDir, "latest_breach_scan.json");
 const HIBP_API_KEY = process.env.HIBP_API_KEY?.trim();
 const HIBP_BASE = "https://haveibeenpwned.com/api/v3";
 const XON_BASE = "https://api.xposedornot.com/v1";
+const CAVALIER_BASE = "https://cavalier.hudsonrock.com/api/json/v2/osint-tools";
 const USER_AGENT = "darkweb-monitor-dashboard-breach-monitor";
 
 // HIBP/XposedOrNot 노출 항목(영문) → 한글 표시 매핑(미정의는 원문 유지).
@@ -234,7 +235,39 @@ function makeFinding(domain, alias, breachName, meta, nowIso) {
     severity: severityForDataClasses(meta.dataClasses ?? []),
     isNew: false,
     discoveredAt: nowIso,
+    source: "",
   };
+}
+
+// ── Hudson Rock Cavalier (무료, 키 불필요) — 도메인 전수 인포스틸러 감염 ──────
+async function collectCavalier(domains, nowIso) {
+  const out = [];
+  for (const domain of domains) {
+    try {
+      const res = await fetch(`${CAVALIER_BASE}/search-by-domain?domain=${encodeURIComponent(domain)}`, {
+        headers: { "user-agent": USER_AGENT },
+      });
+      if (!res.ok) continue;
+      const d = await res.json();
+      const urls = (d?.data?.all_urls ?? [])
+        .slice(0, 10)
+        .map((u) => ({ url: u.url, type: u.type, occurrence: u.occurrence }));
+      out.push({
+        domain,
+        source: "Hudson Rock Cavalier",
+        total: d.total ?? 0,
+        employees: d.employees ?? 0,
+        users: d.users ?? 0,
+        thirdParties: d.third_parties ?? 0,
+        affectedUrls: urls,
+        scannedAt: nowIso,
+      });
+      await sleep(300);
+    } catch {
+      // 도메인별 실패는 건너뜀
+    }
+  }
+  return out;
 }
 
 // ── 데모 데이터(소스 미설정 시) ────────────────────────────────────────────
@@ -299,6 +332,12 @@ async function loadSupabase(scan) {
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
   if (!url || !key || scan.isDemo) return;
   try {
+    const sbHeaders = {
+      apikey: key,
+      Authorization: `Bearer ${key}`,
+      "Content-Type": "application/json",
+      Prefer: "resolution=merge-duplicates,return=minimal",
+    };
     const rows = scan.findings.map((f) => ({
       finding_id: f.id,
       account_masked: f.accountMasked,
@@ -310,20 +349,33 @@ async function loadSupabase(scan) {
       severity: f.severity,
       is_new: f.isNew,
       discovered_at: f.discoveredAt,
+      source: f.source,
     }));
-    if (rows.length === 0) return;
-    const res = await fetch(`${url}/rest/v1/breach_findings?on_conflict=finding_id`, {
-      method: "POST",
-      headers: {
-        apikey: key,
-        Authorization: `Bearer ${key}`,
-        "Content-Type": "application/json",
-        Prefer: "resolution=merge-duplicates,return=minimal",
-      },
-      body: JSON.stringify(rows),
-    });
-    if (res.ok) console.log(`[supabase] breach_findings upsert ${rows.length}행`);
-    else console.warn(`[supabase] 적재 실패 HTTP ${res.status} (테이블 미생성일 수 있음 — 002 마이그레이션 확인)`);
+    if (rows.length) {
+      const res = await fetch(`${url}/rest/v1/breach_findings?on_conflict=finding_id`, {
+        method: "POST", headers: sbHeaders, body: JSON.stringify(rows),
+      });
+      if (res.ok) console.log(`[supabase] breach_findings upsert ${rows.length}행`);
+      else console.warn(`[supabase] breach_findings 적재 실패 HTTP ${res.status} (002 마이그레이션 확인)`);
+    }
+    // 인포스틸러(도메인 전수) 적재
+    const infRows = (scan.infostealer ?? []).map((i) => ({
+      domain: i.domain,
+      source: i.source,
+      total: i.total,
+      employees: i.employees,
+      users: i.users,
+      third_parties: i.thirdParties,
+      affected_urls: i.affectedUrls,
+      scanned_at: i.scannedAt,
+    }));
+    if (infRows.length) {
+      const res2 = await fetch(`${url}/rest/v1/infostealer_findings?on_conflict=domain`, {
+        method: "POST", headers: sbHeaders, body: JSON.stringify(infRows),
+      });
+      if (res2.ok) console.log(`[supabase] infostealer_findings upsert ${infRows.length}행`);
+      else console.warn(`[supabase] infostealer 적재 실패 HTTP ${res2.status} (004 마이그레이션 확인)`);
+    }
   } catch (err) {
     console.warn(`[supabase] 적재 건너뜀: ${err.message}`);
   }
@@ -402,9 +454,41 @@ async function main() {
     console.log("[monitor] 소스 미설정 → 데모 데이터 생성");
   }
 
-  // 신규 표시 (실데이터 한정 — 데모는 항상 false)
-  for (const f of findings) f.isNew = !isDemo && !prevIds.has(f.id);
+  // 신규 표시 + 출처 기록 (실데이터 한정 — 데모는 항상 false)
+  for (const f of findings) {
+    f.isNew = !isDemo && !prevIds.has(f.id);
+    f.source = source;
+  }
   findings = sortFindings(findings);
+
+  // 다크웹 인포스틸러 감염 — 도메인 전수 (Hudson Rock Cavalier, 무료)
+  let infostealer = [];
+  if (!isDemo && domains.length) {
+    console.log(`[monitor] Cavalier 도메인 전수 조회 ${domains.length}건`);
+    infostealer = await collectCavalier(domains, nowIso);
+    const totInf = infostealer.reduce((s, i) => s + i.total, 0);
+    console.log(`[monitor] 인포스틸러 감염 합계 ${totInf}건`);
+  }
+
+  // 수집 출처 기록 (provenance)
+  const sources = [
+    {
+      name: source,
+      kind: "breach",
+      endpoint: HIBP_API_KEY ? "haveibeenpwned.com /api/v3/breacheddomain" : "api.xposedornot.com /v1/check-email",
+      count: findings.length,
+      scannedAt: nowIso,
+    },
+  ];
+  if (infostealer.length) {
+    sources.push({
+      name: "Hudson Rock Cavalier",
+      kind: "infostealer",
+      endpoint: "cavalier.hudsonrock.com /search-by-domain",
+      count: infostealer.reduce((s, i) => s + i.total, 0),
+      scannedAt: nowIso,
+    });
+  }
 
   const summary = summarize(findings, domains);
   const history = [
@@ -412,7 +496,7 @@ async function main() {
     { scannedAt: nowIso, total: summary.total, newCount: summary.newCount },
   ];
 
-  const scan = { generatedAt: nowIso, source, status, isDemo, domains, findings, summary, history, note };
+  const scan = { generatedAt: nowIso, source, status, isDemo, domains, findings, summary, history, note, infostealer, sources };
 
   await writeFile(latestFile, JSON.stringify(scan, null, 2), "utf8");
   await writeFile(join(historyDir, `breach_scan_${todayStamp()}.json`), JSON.stringify(scan, null, 2), "utf8");
