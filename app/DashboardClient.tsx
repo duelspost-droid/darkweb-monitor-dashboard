@@ -19,7 +19,7 @@ import { PageHero } from "@/components/ui/PageHero";
 import { Panel } from "@/components/ui/Panel";
 import { StatTile } from "@/components/ui/StatTile";
 import { BarList } from "@/components/ui/BarList";
-import { supabase, supabaseConfigured } from "@/lib/supabase/browserClient";
+import { supabase, supabaseConfigured, adminEmail } from "@/lib/supabase/browserClient";
 import type { BreachScan, BreachSeverity } from "@/lib/types/breachMonitor";
 
 const SEVERITY_META: Record<BreachSeverity, { label: string; color: string; chip: string }> = {
@@ -116,18 +116,28 @@ async function fetchScan(): Promise<BreachScan> {
 }
 
 function LoginGate({ onSignedIn }: { onSignedIn: () => void }) {
-  const [email, setEmail] = useState("");
+  // 고정 관리자 이메일이 설정돼 있으면 비밀번호만 받는다.
+  // 미설정(또는 "다른 계정") 일 때만 이메일 입력을 노출.
+  const hasFixedEmail = Boolean(adminEmail);
+  const [email, setEmail] = useState(adminEmail);
+  const [showEmail, setShowEmail] = useState(!hasFixedEmail);
   const [pw, setPw] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    const loginEmail = (showEmail ? email : adminEmail).trim();
+    if (!loginEmail) {
+      setErr("관리자 이메일이 설정되지 않았습니다. ‘다른 계정으로 로그인’으로 이메일을 입력하세요.");
+      setShowEmail(true);
+      return;
+    }
     setBusy(true);
     setErr("");
-    const { error } = await supabase.auth.signInWithPassword({ email, password: pw });
+    const { error } = await supabase.auth.signInWithPassword({ email: loginEmail, password: pw });
     setBusy(false);
-    if (error) setErr("로그인 실패: 이메일/비밀번호를 확인하세요.");
+    if (error) setErr(showEmail ? "로그인 실패: 이메일/비밀번호를 확인하세요." : "로그인 실패: 비밀번호를 확인하세요.");
     else onSignedIn();
   }
 
@@ -143,20 +153,34 @@ function LoginGate({ onSignedIn }: { onSignedIn: () => void }) {
             <p className="text-xs text-muted">다크웹 유출 모니터링 · 내부 전용</p>
           </div>
         </div>
-        <label className="mb-1 block text-xs font-semibold text-muted">이메일</label>
-        <input
-          type="email"
-          autoComplete="username"
-          required
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          className="mb-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-rose-400"
-        />
+
+        {/* 이메일: 고정 계정이면 숨기고, 어떤 계정으로 들어가는지 칩으로 안내 */}
+        {showEmail ? (
+          <>
+            <label className="mb-1 block text-xs font-semibold text-muted">이메일</label>
+            <input
+              type="email"
+              autoComplete="username"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="mb-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-rose-400"
+            />
+          </>
+        ) : (
+          <div className="mb-3 flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+            <Lock size={12} className="shrink-0 text-slate-400" aria-hidden />
+            <span className="font-mono">{adminEmail}</span>
+            <span className="ml-auto text-[11px] text-muted">관리자 계정</span>
+          </div>
+        )}
+
         <label className="mb-1 block text-xs font-semibold text-muted">비밀번호</label>
         <input
           type="password"
           autoComplete="current-password"
           required
+          autoFocus
           value={pw}
           onChange={(e) => setPw(e.target.value)}
           className="mb-4 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-rose-400"
@@ -169,6 +193,21 @@ function LoginGate({ onSignedIn }: { onSignedIn: () => void }) {
         >
           {busy ? "확인 중…" : "로그인"}
         </button>
+
+        {hasFixedEmail && (
+          <button
+            type="button"
+            onClick={() => {
+              setShowEmail((v) => !v);
+              setErr("");
+              if (showEmail) setEmail(adminEmail); // 고정 계정으로 되돌릴 때 값 복원
+            }}
+            className="mt-3 block w-full text-center text-[11px] font-semibold text-slate-500 underline-offset-2 hover:text-slate-700 hover:underline"
+          >
+            {showEmail ? "고정 관리자 계정으로 로그인" : "다른 계정으로 로그인"}
+          </button>
+        )}
+
         <p className="mt-4 text-center text-[11px] leading-5 text-muted">
           승인된 관리자만 접근할 수 있습니다. 데이터는 로그인 후에만 조회됩니다(RLS 보호).
         </p>
