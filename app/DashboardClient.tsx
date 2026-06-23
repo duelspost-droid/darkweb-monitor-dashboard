@@ -34,6 +34,14 @@ const SEVERITY_META: Record<BreachSeverity, { label: string; color: string; chip
 };
 const SEVERITY_RANK: Record<string, number> = { low: 0, medium: 1, high: 2, critical: 3 };
 
+// 모니터링 도메인 → 계열사명 (표시용).
+const INSTITUTIONS: Record<string, string> = {
+  "jbfg.com": "JB금융지주",
+  "jbbank.co.kr": "전북은행",
+  "kjbank.com": "광주은행",
+  "wooricap.com": "JB우리캐피탈",
+};
+
 function fmtDate(iso: string) {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -368,6 +376,24 @@ export default function DashboardClient() {
   const hosts = scan.infostealerHosts ?? [];
   const hostsCorpTotal = hosts.reduce((s, h) => s + (h.totalCorporateServices || 0), 0);
 
+  // 계열사별 통합 개요 (유출 계정 + 인포스틸러)
+  const breachByDomain = new Map(summary.byDomain.map((d) => [d.domain, d.count]));
+  const infoByDomain = new Map(infostealer.map((i) => [i.domain, i]));
+  const overview = scan.domains
+    .map((d) => {
+      const inf = infoByDomain.get(d);
+      return {
+        domain: d,
+        name: INSTITUTIONS[d] ?? d,
+        breach: breachByDomain.get(d) ?? 0,
+        infoTotal: inf?.total ?? 0,
+        employees: inf?.employees ?? 0,
+        users: inf?.users ?? 0,
+        thirdParties: inf?.thirdParties ?? 0,
+      };
+    })
+    .sort((a, b) => b.breach + b.infoTotal - (a.breach + a.infoTotal));
+
   return (
     <div className="space-y-7 pb-14">
       <div className="flex items-center justify-between gap-3">
@@ -407,6 +433,41 @@ export default function DashboardClient() {
         <StatTile label="이번 스캔 신규" value={summary.newCount} unit="건" icon={<Sparkles size={18} />} accent="#b45309" trend={{ label: summary.newCount > 0 ? "신규 발견" : "변동 없음", dir: summary.newCount > 0 ? "down" : "neutral" }} sub="직전 대비" />
         <StatTile label="인포스틸러 감염" value={infoTotal} unit="건" icon={<Bug size={18} />} accent="#7f1d1d" trend={{ label: "도메인 전수", dir: infoTotal > 0 ? "down" : "up" }} sub="Cavalier" />
       </div>
+
+      <Panel title="계열사별 위험 개요" subtitle="회사별 유출 계정 · 인포스틸러 감염 통합 현황" right={<span className="chip chip-neutral"><Globe size={13} className="mr-1 inline" aria-hidden /> {overview.length}개사</span>}>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {overview.map((o) => {
+            const dot = o.breach > 0 ? "bg-rose-500" : o.infoTotal > 100 ? "bg-rose-400" : o.infoTotal > 0 ? "bg-amber-500" : "bg-teal-500";
+            const risk = o.breach > 0 || o.infoTotal > 0;
+            return (
+              <div key={o.domain} className={`rounded-xl border p-4 ${risk ? "border-rose-200 bg-rose-50/40" : "border-slate-200 bg-slate-50"}`}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-bold text-ink">{o.name}</div>
+                    <div className="truncate font-mono text-[11px] text-muted">{o.domain}</div>
+                  </div>
+                  <span className={`mt-1 inline-flex h-2.5 w-2.5 shrink-0 rounded-full ${dot}`} aria-hidden />
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <div className="rounded-lg bg-white/70 p-2 text-center">
+                    <div className="text-lg font-extrabold text-rose-700">{o.breach}</div>
+                    <div className="text-[10px] text-muted">유출 계정</div>
+                  </div>
+                  <div className="rounded-lg bg-white/70 p-2 text-center">
+                    <div className="text-lg font-extrabold text-slate-800">{o.infoTotal.toLocaleString()}</div>
+                    <div className="text-[10px] text-muted">인포스틸러</div>
+                  </div>
+                </div>
+                {o.infoTotal > 0 && (
+                  <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-muted">
+                    <span>임직원 {o.employees}</span><span>·</span><span>사용자 {o.users}</span><span>·</span><span>서드파티 {o.thirdParties}</span>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </Panel>
 
       <section className="grid gap-4 lg:grid-cols-2">
         <Panel title="심각도 분포" subtitle="노출 데이터 분류 기반 위험도">
@@ -486,27 +547,49 @@ export default function DashboardClient() {
           <div className="space-y-5">
             {infoItems.length > 0 && <BarList items={infoItems} />}
             <div className="grid gap-3 md:grid-cols-2">
-              {infostealer.filter((i) => i.total > 0).sort((a, b) => b.total - a.total).map((i) => (
-                <div key={i.domain} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                  <div className="flex items-center justify-between">
-                    <span className="font-mono text-sm font-bold text-ink">{i.domain}</span>
-                    <span className="text-xs font-semibold text-rose-700">{i.total.toLocaleString()}건</span>
+              {infostealer.filter((i) => i.total > 0).sort((a, b) => b.total - a.total).map((i) => {
+                const seg = [
+                  { label: "임직원", v: i.employees, c: "#be123c" },
+                  { label: "사용자", v: i.users, c: "#b45309" },
+                  { label: "서드파티", v: i.thirdParties, c: "#3157a4" },
+                ].filter((s) => s.v > 0);
+                const segTotal = seg.reduce((s, x) => s + x.v, 0) || 1;
+                return (
+                  <div key={i.domain} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <div className="min-w-0">
+                        <span className="text-sm font-bold text-ink">{INSTITUTIONS[i.domain] ?? i.domain}</span>
+                        <span className="ml-1.5 font-mono text-[11px] text-muted">{i.domain}</span>
+                      </div>
+                      <span className="shrink-0 text-sm font-extrabold text-rose-700">{i.total.toLocaleString()}<span className="text-[11px] font-semibold">건</span></span>
+                    </div>
+                    {/* 감염 유형 분포 막대 */}
+                    <div className="mt-2 flex h-2 overflow-hidden rounded-full bg-slate-200">
+                      {seg.map((s) => <div key={s.label} style={{ width: `${(s.v / segTotal) * 100}%`, background: s.c }} aria-hidden />)}
+                    </div>
+                    <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px]">
+                      <span className="text-rose-700">● 임직원 {i.employees}</span>
+                      <span className="text-amber-700">● 사용자 {i.users}</span>
+                      <span className="text-sky-700">● 서드파티 {i.thirdParties}</span>
+                    </div>
+                    {i.affectedUrls.length > 0 && (
+                      <div className="mt-3 border-t border-slate-200 pt-2">
+                        <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted">스틸러 로그에 잡힌 로그인 URL</div>
+                        <ul className="space-y-1">
+                          {i.affectedUrls.slice(0, 6).map((u) => (
+                            <li key={u.url} className="flex items-center gap-2 text-[11px]">
+                              <span className={`shrink-0 rounded px-1 py-0.5 text-[9px] font-bold ${u.type === "employee" ? "bg-rose-100 text-rose-700" : "bg-sky-100 text-sky-700"}`}>{u.type === "employee" ? "직원" : "고객"}</span>
+                              <span className="truncate font-mono text-slate-600">{u.url}</span>
+                              <span className="ml-auto shrink-0 text-muted">{u.occurrence}회</span>
+                            </li>
+                          ))}
+                          {i.affectedUrls.length > 6 && <li className="text-[10px] text-muted">+{i.affectedUrls.length - 6}개 더</li>}
+                        </ul>
+                      </div>
+                    )}
                   </div>
-                  <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-muted">
-                    <span>임직원 {i.employees}</span><span>· 사용자 {i.users}</span><span>· 서드파티 {i.thirdParties}</span>
-                  </div>
-                  {i.affectedUrls.length > 0 && (
-                    <ul className="mt-2 space-y-1">
-                      {i.affectedUrls.slice(0, 4).map((u) => (
-                        <li key={u.url} className="flex items-center justify-between gap-2 text-[11px]">
-                          <span className="truncate font-mono text-slate-600">{u.url}</span>
-                          <span className="shrink-0 text-muted">{u.occurrence}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
@@ -602,31 +685,28 @@ export default function DashboardClient() {
         </Panel>
       )}
 
-      <section className="grid gap-4 lg:grid-cols-2">
-        <Panel title="스캔 이력" subtitle="최근 스캔별 노출 건수 추이">
-          {historyRecent.length ? (
-            <ul className="space-y-2">
-              {historyRecent.map((h) => (
-                <li key={h.scannedAt} className="flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-sm">
-                  <span className="font-mono text-xs text-muted">{fmtDate(h.scannedAt)}</span>
-                  <span className="text-slate-700">총 <strong className="text-ink">{h.total}</strong>건
-                    {h.newCount > 0 && <span className="ml-2 rounded-full bg-amber-100 px-1.5 py-0.5 text-[11px] font-bold text-amber-700">신규 {h.newCount}</span>}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          ) : <p className="py-6 text-center text-sm text-muted">이력 없음.</p>}
-        </Panel>
-        <Panel title="동작 방식 · 운영 안내" subtitle="합법적 유출 인텔리전스 기반 모니터링">
-          <ul className="space-y-3 text-sm leading-6 text-slate-700">
-            <li className="flex gap-2"><ShieldCheck size={16} className="mt-0.5 shrink-0 text-teal-600" aria-hidden /><span>다크웹 직접 크롤링 없이 검증된 유출 인텔리전스 API(XposedOrNot·Hudson Rock Cavalier)로 조회합니다.</span></li>
-            <li className="flex gap-2"><ShieldCheck size={16} className="mt-0.5 shrink-0 text-teal-600" aria-hidden /><span>매일 자정(KST) Supabase Edge Function 자동 배치로 갱신됩니다.</span></li>
-            <li className="flex gap-2"><Info size={16} className="mt-0.5 shrink-0 text-sky-600" aria-hidden /><span>이 화면은 관리자 인증 후에만 데이터가 조회됩니다(RLS). 고객 개인 데이터는 집계까지만 포함합니다.</span></li>
-            <li className="flex gap-2"><AlertTriangle size={16} className="mt-0.5 shrink-0 text-amber-600" aria-hidden /><span>유출/감염 확인 계정은 즉시 비밀번호 재설정·MFA, 활성 세션 무효화를 권고합니다.</span></li>
+      <Panel title="스캔 이력" subtitle="최근 스캔별 노출 건수 추이">
+        {historyRecent.length ? (
+          <ul className="grid gap-2 sm:grid-cols-2">
+            {historyRecent.map((h) => (
+              <li key={h.scannedAt} className="flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-sm">
+                <span className="font-mono text-xs text-muted">{fmtDate(h.scannedAt)}</span>
+                <span className="text-slate-700">총 <strong className="text-ink">{h.total}</strong>건
+                  {h.newCount > 0 && <span className="ml-2 rounded-full bg-amber-100 px-1.5 py-0.5 text-[11px] font-bold text-amber-700">신규 {h.newCount}</span>}
+                </span>
+              </li>
+            ))}
           </ul>
-          <p className="mt-4 border-t border-slate-100 pt-3 text-xs text-muted">출처: {scan.source}</p>
-        </Panel>
-      </section>
+        ) : <p className="py-6 text-center text-sm text-muted">이력 없음.</p>}
+      </Panel>
+
+      <p className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 px-4 text-center text-[11px] leading-5 text-muted">
+        <span className="inline-flex items-center gap-1"><ShieldCheck size={12} className="text-teal-600" aria-hidden /> 합법 인텔리전스 API(XposedOrNot·Hudson Rock·IntelX·LeakCheck) — 다크웹 직접 크롤링 없음</span>
+        <span aria-hidden>·</span>
+        <span>매일 자정(KST) Supabase 자동 배치</span>
+        <span aria-hidden>·</span>
+        <span>관리자 인증(RLS) 전용 · 외부 공유 금지</span>
+      </p>
     </div>
   );
 }

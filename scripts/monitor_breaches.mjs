@@ -5,7 +5,7 @@
 //     config.domains 의 도메인 계정 유출을 전수 조회한다.
 //  2) 키가 없고 config.accounts(개별 이메일)가 있으면 무료 XposedOrNot API 로
 //     계정별 유출을 조회한다(키 불필요, 실데이터).
-//  3) 둘 다 없으면 페이지가 비지 않도록 데모 데이터(isDemo=true)를 생성한다.
+//  3) 둘 다 없으면 status="no_source" 로 수집을 건너뛴다(가짜/데모 데이터 생성 안 함).
 //
 // 어떤 경우에도:
 //  - 평문 비밀번호·전체 이메일·기타 개인식별자는 절대 저장하지 않는다.
@@ -521,25 +521,6 @@ async function collectLeakcheck(domains, accounts, nowIso) {
   return { findings: [], used: false, count: 0, mode: "" };
 }
 
-// ── 데모 데이터(소스 미설정 시) ────────────────────────────────────────────
-function buildDemoFindings(domains, nowIso) {
-  const demoBreaches = [
-    { name: "LinkedIn", title: "LinkedIn", date: "2012-05-05", dataClasses: ["Email addresses", "Passwords"] },
-    { name: "Collection1", title: "Collection #1", date: "2019-01-07", dataClasses: ["Email addresses", "Passwords"] },
-    { name: "Dropbox", title: "Dropbox", date: "2012-07-01", dataClasses: ["Email addresses", "Passwords"] },
-    { name: "Canva", title: "Canva", date: "2019-05-24", dataClasses: ["Email addresses", "Names", "Usernames", "Geographic locations"] },
-    { name: "RiverCityMedia", title: "River City Media Spam List", date: "2017-01-01", dataClasses: ["Email addresses", "IP addresses", "Names", "Physical addresses"] },
-  ];
-  const demoAliases = ["admin", "finance.team", "hr", "support", "j.kim", "s.park"];
-  const findings = [];
-  const domain = domains[0] || "example.com";
-  demoAliases.forEach((alias, i) => {
-    const picks = demoBreaches.slice(i % 3, (i % 3) + 1 + (i % 2));
-    for (const b of picks) findings.push(makeFinding(domain, alias, b.name, b, nowIso));
-  });
-  return findings;
-}
-
 function summarize(findings, domains) {
   const bySeverity = { critical: 0, high: 0, medium: 0, low: 0 };
   const byDomainMap = new Map(domains.map((d) => [d, 0]));
@@ -710,15 +691,13 @@ async function main() {
       }
     }
   } else {
-    // (3) 데모
-    isDemo = true;
+    // (3) 소스 미설정 — 가짜(데모) 데이터를 만들지 않는다. 대시보드는 Supabase 실데이터만 표시.
     status = "no_source";
-    source = "데모 데이터 (모니터링 대상 미설정)";
+    source = "(모니터링 대상 미설정)";
     note =
-      "HIBP_API_KEY 또는 모니터링 대상 계정(accounts)이 설정되지 않아 예시(데모) 데이터를 표시합니다. " +
-      "data/security/monitor_config.local.json 에 회사 계정 이메일을 넣으면(무료 XposedOrNot) 실데이터로 전환됩니다.";
-    findings = buildDemoFindings(domains, nowIso);
-    console.log("[monitor] 소스 미설정 → 데모 데이터 생성");
+      "HIBP_API_KEY 또는 모니터링 대상 계정(accounts)이 설정되지 않았습니다. " +
+      "data/security/monitor_config.local.json 의 accounts 에 회사 계정 이메일을 넣으면(무료 XposedOrNot) 실데이터를 수집합니다.";
+    console.log("[monitor] 소스 미설정 → 수집 건너뜀");
   }
 
   // 1차(주) 소스 결과에 출처 라벨 부여 + 건수 기록
@@ -816,8 +795,7 @@ async function main() {
 
   console.log(
     `[monitor] 완료 — 총 ${summary.total}건 (신규 ${summary.newCount}, ` +
-      `critical ${summary.bySeverity.critical}, high ${summary.bySeverity.high})` +
-      (isDemo ? " [데모]" : "")
+      `critical ${summary.bySeverity.critical}, high ${summary.bySeverity.high})`
   );
 }
 

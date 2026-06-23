@@ -12,4 +12,6 @@ npm-debug.log*
 data/security/*.local.json
 data/security/*.local.html
 data/security/*.local.*
-# 스캔 이력은 커밋(웹 기록 목적). 단 일별 스냅샷이 많아지면 정리.
+# 로컬 스캔 산출물 — Supabase 백엔드로 전환돼 커밋 불필요(대시보드는 DB에서 직접 조회).
+data/security/latest_breach_scan.json
+data/security/history/
