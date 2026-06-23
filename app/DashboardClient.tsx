@@ -423,7 +423,7 @@ export default function DashboardClient() {
   const info3p = infostealer.reduce((s, i) => s + (i.thirdParties || 0), 0);
 
   return (
-    <div className="space-y-7 pb-14">
+    <div className="space-y-7 overflow-x-clip pb-14">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="inline-flex items-center gap-1.5 rounded-full border border-rose-300 bg-rose-50 px-3 py-1 text-xs font-bold text-rose-700">
           <Lock size={12} className="shrink-0" aria-hidden /> 관리자 전용 · 외부 공유 금지
@@ -572,7 +572,7 @@ export default function DashboardClient() {
                     </span>
                     <span className={`inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-xs font-semibold ${sev.chip}`}>{sev.label}</span>
                   </div>
-                  <div className="mt-1.5 text-sm text-slate-700">{f.breachTitle} <span className="text-xs text-muted">· {f.breachDate || "—"}</span></div>
+                  <div className="mt-1.5 break-words text-sm text-slate-700">{f.breachTitle} <span className="text-xs text-muted">· {f.breachDate || "—"}</span></div>
                   {f.dataClasses.length > 0 && (
                     <div className="mt-1.5 flex flex-wrap gap-1">
                       {f.dataClasses.map((dc) => (
@@ -665,7 +665,7 @@ export default function DashboardClient() {
                             return (
                               <li key={u.url} className="flex items-center gap-2 text-[11px]">
                                 <span className={`shrink-0 rounded px-1 py-0.5 text-[9px] font-bold ${k.cls}`}>{k.label}</span>
-                                <span className="truncate font-mono text-slate-600">{u.url}</span>
+                                <span className="min-w-0 truncate font-mono text-slate-600">{u.url}</span>
                                 <span className="ml-auto shrink-0 text-muted">{u.occurrence.toLocaleString()}회</span>
                               </li>
                             );
