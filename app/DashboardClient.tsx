@@ -10,6 +10,10 @@ import {
   Info,
   LogOut,
   Lock,
+  Monitor,
+  KeyRound,
+  MapPin,
+  FileWarning,
   ShieldAlert,
   ShieldCheck,
   Sparkles,
@@ -39,7 +43,7 @@ function fmtDate(iso: string) {
 
 // Supabase 3개 테이블 → BreachScan 조립 (관리자 인증 후 클라이언트에서).
 async function fetchScan(): Promise<BreachScan> {
-  const [bf, sr, inf] = await Promise.all([
+  const [bf, sr, inf, hosts] = await Promise.all([
     supabase
       .from("breach_findings")
       .select(
@@ -47,10 +51,12 @@ async function fetchScan(): Promise<BreachScan> {
       ),
     supabase.from("scan_runs").select("*").order("scanned_at", { ascending: false }).limit(30),
     supabase.from("infostealer_findings").select("*").order("total", { ascending: false }),
+    supabase.from("infostealer_hosts").select("*").order("date_compromised", { ascending: false }),
   ]);
   if (bf.error) throw bf.error;
   if (sr.error) throw sr.error;
   if (inf.error) throw inf.error;
+  // infostealer_hosts: 테이블 미생성/권한 오류 시 빈 배열(대시보드 중단 방지)
 
   const findings = (bf.data ?? []).map((r) => ({
     id: r.finding_id,
@@ -110,6 +116,22 @@ async function fetchScan(): Promise<BreachScan> {
       thirdParties: i.third_parties,
       affectedUrls: i.affected_urls ?? [],
       scannedAt: i.scanned_at,
+    })),
+    infostealerHosts: (hosts.error ? [] : hosts.data ?? []).map((h) => ({
+      accountMasked: h.account_masked,
+      domain: h.domain,
+      computerName: h.computer_name ?? null,
+      operatingSystem: h.operating_system ?? null,
+      ip: h.ip ?? null,
+      dateCompromised: h.date_compromised ?? null,
+      stealerFamily: h.stealer_family ?? null,
+      malwarePath: h.malware_path ?? null,
+      antiviruses: h.antiviruses ?? [],
+      totalCorporateServices: h.total_corporate_services ?? 0,
+      totalUserServices: h.total_user_services ?? 0,
+      topPasswords: h.top_passwords ?? [],
+      topLogins: h.top_logins ?? [],
+      scannedAt: h.scanned_at,
     })),
     sources: latest?.sources ?? [],
   };
@@ -343,6 +365,8 @@ export default function DashboardClient() {
     .filter((it) => it.value > 0)
     .sort((a, b) => b.value - a.value);
   const sources = scan.sources ?? [];
+  const hosts = scan.infostealerHosts ?? [];
+  const hostsCorpTotal = hosts.reduce((s, h) => s + (h.totalCorporateServices || 0), 0);
 
   return (
     <div className="space-y-7 pb-14">
@@ -441,6 +465,20 @@ export default function DashboardClient() {
         </div>
       </Panel>
 
+      <Panel title="인포스틸러 점검이란?" subtitle="다크웹 정보탈취 악성코드(인포스틸러) 감염 점검의 개념과 방법">
+        <div className="grid gap-4 text-sm leading-6 text-slate-700 lg:grid-cols-2">
+          <div className="space-y-2.5">
+            <p className="flex gap-2"><Bug size={16} className="mt-0.5 shrink-0 text-rose-600" aria-hidden /><span><strong>인포스틸러</strong>는 감염된 PC에서 브라우저에 저장된 비밀번호·쿠키·세션·자동완성·암호화폐 지갑 등을 통째로 탈취해 다크웹에 유통하는 악성코드입니다. 단순 유출과 달리 <strong>로그인 세션 탈취로 MFA(2단계 인증)까지 우회</strong>될 수 있어 위험합니다.</span></p>
+            <p className="flex gap-2"><Database size={16} className="mt-0.5 shrink-0 text-sky-600" aria-hidden /><span>다크웹을 직접 크롤링하지 않고, <strong>Hudson Rock Cavalier</strong>가 합법 수집·정규화한 스틸러 로그(인포스틸러 감염 로그 DB)를 조회합니다.</span></p>
+          </div>
+          <div className="space-y-2.5">
+            <p className="flex gap-2"><ShieldCheck size={16} className="mt-0.5 shrink-0 text-teal-600" aria-hidden /><span><strong>무엇을 점검하나</strong> — ① 회사 4개 도메인 관련 감염 건수(임직원·사용자·서드파티), ② 어떤 로그인 URL이 스틸러 로그에 잡혔는지, ③ 모니터링 계정별 <strong>감염 호스트 상세</strong>(아래).</span></p>
+            <p className="flex gap-2"><Lock size={16} className="mt-0.5 shrink-0 text-slate-500" aria-hidden /><span><strong>개인정보</strong> — 계정은 마스킹, 비밀번호·IP는 Hudson Rock이 부분 마스킹한 값만 보관하며 <strong>관리자 인증 후에만</strong> 표시합니다.</span></p>
+          </div>
+        </div>
+        <p className="mt-3 flex gap-2 border-t border-slate-100 pt-3 text-xs text-amber-700"><AlertTriangle size={14} className="mt-0.5 shrink-0" aria-hidden /><span>감염 확인 시: 즉시 비밀번호 재설정 + MFA 재등록 + 해당 단말의 모든 활성 세션 무효화 + 단말 백신 정밀검사/포맷을 권고합니다(세션 쿠키까지 탈취됐을 수 있어 비번 변경만으론 불충분).</span></p>
+      </Panel>
+
       <Panel title="다크웹 인포스틸러 감염 (도메인 전수)" subtitle="악성코드 감염으로 탈취된 다크웹 스틸러 로그. 도메인 전체 집계." right={<span className="chip chip-neutral"><Bug size={13} className="mr-1 inline" aria-hidden /> 총 {infoTotal.toLocaleString()}건</span>}>
         {infostealer.length === 0 ? (
           <p className="py-6 text-center text-sm text-muted">인포스틸러 데이터 없음.</p>
@@ -470,6 +508,71 @@ export default function DashboardClient() {
                 </div>
               ))}
             </div>
+          </div>
+        )}
+      </Panel>
+
+      <Panel
+        title="감염 호스트 상세 (피해 단말)"
+        subtitle="모니터링 계정의 인포스틸러 감염 단말 — 민감정보, 관리자 전용·외부 공유 금지"
+        right={<span className="chip chip-neutral"><Monitor size={13} className="mr-1 inline" aria-hidden /> {hosts.length}대 · 사내 {hostsCorpTotal}건</span>}
+      >
+        {hosts.length === 0 ? (
+          <div className="py-6 text-center text-sm text-muted">
+            <p className="font-semibold text-teal-700">모니터링 계정에서 감염된 호스트가 없습니다. 👍</p>
+            <p className="mt-1 text-xs">호스트 상세는 모니터링 대상 계정(<span className="font-mono">MONITORED_EMAILS</span>)에 인포스틸러 감염 이력이 있을 때 자동 표시됩니다.</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <p className="flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] font-semibold text-rose-700">
+              <Lock size={12} aria-hidden /> 부분 마스킹된 자격증명 샘플이 포함됩니다 — 화면 캡처·외부 공유 금지
+            </p>
+            {hosts.map((h, idx) => (
+              <div key={`${h.accountMasked}-${h.computerName ?? ""}-${idx}`} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-mono text-sm font-bold text-ink">{h.accountMasked}</span>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {h.stealerFamily && (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-rose-300 bg-rose-100 px-2 py-0.5 text-[11px] font-semibold text-rose-700">
+                        <Bug size={11} aria-hidden /> {h.stealerFamily}
+                      </span>
+                    )}
+                    {h.dateCompromised && (
+                      <span className="inline-flex items-center gap-1 text-[11px] text-muted">
+                        <CalendarClock size={11} aria-hidden /> 감염일 {h.dateCompromised}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div className="mt-3 grid gap-2 text-[12px] sm:grid-cols-2 lg:grid-cols-4">
+                  <div className="flex items-center gap-1.5"><Monitor size={13} className="shrink-0 text-slate-400" aria-hidden /><span className="text-muted">PC</span><span className="font-mono text-slate-700">{h.computerName ?? "—"}</span></div>
+                  <div className="flex items-center gap-1.5"><Database size={13} className="shrink-0 text-slate-400" aria-hidden /><span className="text-muted">OS</span><span className="font-mono text-slate-700">{h.operatingSystem ?? "—"}</span></div>
+                  <div className="flex items-center gap-1.5"><MapPin size={13} className="shrink-0 text-slate-400" aria-hidden /><span className="text-muted">IP</span><span className="font-mono text-slate-700">{h.ip ?? "—"}</span></div>
+                  <div className="flex items-center gap-1.5"><ShieldAlert size={13} className="shrink-0 text-rose-400" aria-hidden /><span className="text-muted">탈취</span><span className="text-slate-700">사내 <strong className="text-rose-700">{h.totalCorporateServices}</strong> · 개인 {h.totalUserServices}</span></div>
+                </div>
+                {h.malwarePath && (
+                  <div className="mt-2 flex items-start gap-1.5 text-[11px] text-slate-600">
+                    <FileWarning size={12} className="mt-0.5 shrink-0 text-amber-500" aria-hidden /><span className="text-muted">악성코드 경로</span><span className="break-all font-mono">{h.malwarePath}</span>
+                  </div>
+                )}
+                {h.antiviruses.length > 0 && (
+                  <div className="mt-1 flex items-center gap-1.5 text-[11px] text-slate-600">
+                    <ShieldCheck size={12} className="shrink-0 text-teal-500" aria-hidden /><span className="text-muted">감염 당시 백신</span><span>{h.antiviruses.join(", ")}</span>
+                  </div>
+                )}
+                {(h.topLogins.length > 0 || h.topPasswords.length > 0) && (
+                  <div className="mt-2 border-t border-slate-200 pt-2">
+                    <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-rose-700"><KeyRound size={11} aria-hidden /> 부분 마스킹 샘플</span>
+                    {h.topLogins.length > 0 && (
+                      <div className="mt-1 text-[11px] text-slate-600"><span className="text-muted">로그인</span> <span className="break-all font-mono">{h.topLogins.join(", ")}</span></div>
+                    )}
+                    {h.topPasswords.length > 0 && (
+                      <div className="mt-0.5 text-[11px] text-slate-600"><span className="text-muted">비밀번호</span> <span className="break-all font-mono">{h.topPasswords.join(", ")}</span></div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
         )}
       </Panel>

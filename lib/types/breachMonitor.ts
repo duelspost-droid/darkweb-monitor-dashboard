@@ -37,6 +37,25 @@ export interface InfostealerFinding {
   scannedAt: string;
 }
 
+// 인포스틸러 감염 호스트(피해자) 상세 — Hudson Rock Cavalier search-by-email.
+// 민감정보(비번/IP)는 Hudson Rock 이 부분 마스킹한 값만 보관. 관리자 인증 후에만 조회.
+export interface InfostealerHost {
+  accountMasked: string;
+  domain: string;
+  computerName: string | null; // 감염 PC 이름
+  operatingSystem: string | null;
+  ip: string | null; // 부분 마스킹 IP
+  dateCompromised: string | null; // YYYY-MM-DD
+  stealerFamily: string | null; // 스틸러 종류
+  malwarePath: string | null; // 악성코드 실행 경로
+  antiviruses: string[]; // 감염 당시 설치 백신
+  totalCorporateServices: number; // 탈취 사내 서비스 수
+  totalUserServices: number; // 탈취 개인 서비스 수
+  topPasswords: string[]; // 부분 마스킹 비번 샘플(평문 아님)
+  topLogins: string[]; // 부분 마스킹 로그인 샘플
+  scannedAt: string;
+}
+
 // 수집 출처 기록 (provenance) — 어떤 소스에서, 언제, 몇 건 수집했는지.
 export interface SourceRecord {
   name: string; // "XposedOrNot (계정별 유출 조회)"
@@ -73,6 +92,8 @@ export interface BreachScan {
   note?: string;
   // 다크웹 인포스틸러 감염 (도메인 전수, Hudson Rock Cavalier)
   infostealer?: InfostealerFinding[];
+  // 인포스틸러 감염 호스트(피해자) 상세 — 관리자 인증 후에만 채워짐
+  infostealerHosts?: InfostealerHost[];
   // 수집 출처 기록 (provenance)
   sources?: SourceRecord[];
 }

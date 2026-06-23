@@ -191,8 +191,17 @@ type RawFinding = Finding & { is_new: boolean; discovered_at: string };
 
 // ── Hudson Rock 계정별 인포스틸러 (무료) → breach_findings ───────────────────
 // 민감값(top_passwords·ip·PC명)은 저장하지 않고 마스킹 계정 + 분류 + 카운트만 남긴다.
-async function collectCavalierAccounts(accounts: string[], nowIso: string): Promise<RawFinding[]> {
+interface InfostealerHostRow {
+  host_id: string; account_masked: string; domain: string;
+  computer_name: string | null; operating_system: string | null; ip: string | null;
+  date_compromised: string | null; stealer_family: string | null; malware_path: string | null;
+  antiviruses: string[]; total_corporate_services: number; total_user_services: number;
+  top_passwords: string[]; top_logins: string[]; scanned_at: string; last_scan_tag?: string;
+}
+
+async function collectCavalierAccounts(accounts: string[], nowIso: string): Promise<{ findings: RawFinding[]; hosts: InfostealerHostRow[] }> {
   const findings: RawFinding[] = [];
+  const hosts: InfostealerHostRow[] = [];
   for (const acct of accounts) {
     const email = acct.trim().toLowerCase();
     const [alias, domain] = email.split("@");
@@ -200,6 +209,7 @@ async function collectCavalierAccounts(accounts: string[], nowIso: string): Prom
     const r = await fetchJson(`${CAVALIER_BASE}/search-by-email?email=${encodeURIComponent(email)}`);
     const stealers = Array.isArray(r.data?.stealers) ? r.data.stealers : [];
     if (stealers.length) {
+      const accountMasked = `${maskLocal(alias)}@${domain}`;
       const seen = new Set<string>();
       let corp = 0, hasPw = false, hasLogin = false, last = "";
       const families = new Set<string>();
@@ -214,6 +224,23 @@ async function collectCavalierAccounts(accounts: string[], nowIso: string): Prom
         if (s.stealer_family) families.add(s.stealer_family);
         const d = String(s.date_compromised || "").slice(0, 10);
         if (d > last) last = d;
+        // 호스트 상세(피해 PC). top_passwords/ip 는 Hudson Rock 이 부분 마스킹한 값만 저장.
+        hosts.push({
+          host_id: await sha1Hex(`${accountMasked}|${s.computer_name || ""}|${s.date_compromised || ""}|${s.ip || ""}`),
+          account_masked: accountMasked, domain,
+          computer_name: s.computer_name || null,
+          operating_system: s.operating_system || null,
+          ip: s.ip || null,
+          date_compromised: d || null,
+          stealer_family: s.stealer_family || null,
+          malware_path: s.malware_path || null,
+          antiviruses: Array.isArray(s.antiviruses) ? s.antiviruses : [],
+          total_corporate_services: Number(s.total_corporate_services || 0),
+          total_user_services: Number(s.total_user_services || 0),
+          top_passwords: Array.isArray(s.top_passwords) ? s.top_passwords.slice(0, 12) : [],
+          top_logins: Array.isArray(s.top_logins) ? s.top_logins.slice(0, 12) : [],
+          scanned_at: nowIso,
+        });
       }
       const dataClasses: string[] = [];
       if (hasLogin) dataClasses.push("자격증명");
@@ -230,7 +257,7 @@ async function collectCavalierAccounts(accounts: string[], nowIso: string): Prom
     }
     await sleep(1000); // 무료 OSINT 공정사용 ~1 req/s
   }
-  return findings;
+  return { findings, hosts };
 }
 
 // ── Intelligence X (키-게이트) → breach_findings ────────────────────────────
@@ -392,6 +419,22 @@ async function sbUpsertInfostealer(rows: Infostealer[]) {
   });
   if (!res.ok) console.warn(`infostealer upsert HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
 }
+async function sbUpsertInfostealerHosts(rows: InfostealerHostRow[]) {
+  if (!rows.length) return;
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/infostealer_hosts?on_conflict=host_id`, {
+    method: "POST",
+    headers: { ...sbHeaders, Prefer: "resolution=merge-duplicates,return=minimal" },
+    body: JSON.stringify(rows),
+  });
+  if (!res.ok) console.warn(`infostealer_hosts upsert HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
+}
+async function sbDeleteStaleHosts(scanTag: string) {
+  // 이번 스캔에서 안 본 호스트 제거 = 현재 모니터링 계정의 감염만 유지.
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/infostealer_hosts?or=(last_scan_tag.neq.${scanTag},last_scan_tag.is.null)`, {
+    method: "DELETE", headers: { ...sbHeaders, Prefer: "return=minimal" },
+  });
+  if (!res.ok) console.warn(`infostealer_hosts stale delete HTTP ${res.status}`);
+}
 
 Deno.serve(async (req) => {
   // 인증: verify_jwt=false 로 두고 공유 시크릿(SCAN_SECRET) 헤더로 보호.
@@ -412,6 +455,7 @@ Deno.serve(async (req) => {
   let note: string | null = null;
   let primaryCount = 0;
   const provenanceExtra: { name: string; kind: string; endpoint: string; count: number; scannedAt: string }[] = [];
+  let infostealerHosts: InfostealerHostRow[] = [];
 
   try {
     if (HIBP_API_KEY && MONITORED_DOMAINS.length) {
@@ -458,10 +502,11 @@ Deno.serve(async (req) => {
       const lc = await collectLeakcheck(MONITORED_DOMAINS, MONITORED_EMAILS, nowIso);
       if (lc.used) { findings.push(...lc.findings); provenanceExtra.push({ name: lc.mode === "v2-domain" ? "LeakCheck" : "LeakCheck (public)", kind: "breach", endpoint: lc.mode === "v2-domain" ? "leakcheck.io /api/v2/query?type=domain" : "leakcheck.io /api/public", count: lc.count, scannedAt: nowIso }); }
     }
-    // Hudson Rock 계정별 인포스틸러 (무료) → breach_findings
+    // Hudson Rock 계정별 인포스틸러 (무료) → breach_findings + 호스트 상세
     if (HUDSONROCK_OSINT && MONITORED_EMAILS.length) {
       const hr = await collectCavalierAccounts(MONITORED_EMAILS, nowIso);
-      if (hr.length) { findings.push(...hr); provenanceExtra.push({ name: "Hudson Rock Cavalier (계정별)", kind: "breach", endpoint: "cavalier.hudsonrock.com /search-by-email", count: hr.length, scannedAt: nowIso }); }
+      infostealerHosts = hr.hosts;
+      if (hr.findings.length) { findings.push(...hr.findings); provenanceExtra.push({ name: "Hudson Rock Cavalier (계정별)", kind: "breach", endpoint: "cavalier.hudsonrock.com /search-by-email", count: hr.findings.length, scannedAt: nowIso }); }
     }
 
     // 중복 제거(같은 finding_id 는 먼저 본 것 유지) + is_new
@@ -485,6 +530,13 @@ Deno.serve(async (req) => {
   if (cavalierDomains.length) {
     infostealer = await collectCavalier(cavalierDomains, nowIso);
     await sbUpsertInfostealer(infostealer);
+  }
+
+  // 감염 호스트 상세 적재 (006) — 정상 스캔 + 계정 수집했을 때만(없으면 stale 정리로 비움)
+  if (status === "ok" && HUDSONROCK_OSINT && MONITORED_EMAILS.length) {
+    const hostRows = infostealerHosts.map((h) => ({ ...h, last_scan_tag: scanTag }));
+    await sbUpsertInfostealerHosts(hostRows);
+    await sbDeleteStaleHosts(scanTag);
   }
 
   const summary = { critical: 0, high: 0, medium: 0, low: 0 };
@@ -511,6 +563,6 @@ Deno.serve(async (req) => {
 
   return new Response(JSON.stringify({
     ok: status !== "error", status, source, total: findings.length, newCount, summary,
-    infostealer: { domains: infostealer.length, total: infTotal }, sources, note,
+    infostealer: { domains: infostealer.length, total: infTotal }, infostealerHosts: infostealerHosts.length, sources, note,
   }), { headers: { "Content-Type": "application/json" } });
 });

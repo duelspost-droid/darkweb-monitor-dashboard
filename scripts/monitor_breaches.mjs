@@ -343,6 +343,7 @@ async function collectCavalier(domains, nowIso) {
 // 절대 저장하지 않고, 마스킹 계정 + 분류(비밀번호/자격증명/감염) + 카운트만 남긴다.
 async function collectCavalierAccounts(accounts, nowIso) {
   const findings = [];
+  const hosts = []; // 감염 호스트(피해자) 상세 — 마스킹 값만
   for (const acct of accounts) {
     const email = String(acct).trim().toLowerCase();
     const [alias, domain] = email.split("@");
@@ -350,6 +351,7 @@ async function collectCavalierAccounts(accounts, nowIso) {
     const r = await fetchJson(`${CAVALIER_BASE}/search-by-email?email=${encodeURIComponent(email)}`);
     const stealers = Array.isArray(r.data?.stealers) ? r.data.stealers : [];
     if (stealers.length) {
+      const accountMasked = `${maskLocalPart(alias)}@${domain}`;
       const seen = new Set();
       let corp = 0, hasPw = false, hasLogin = false, last = "";
       const families = new Set();
@@ -363,6 +365,23 @@ async function collectCavalierAccounts(accounts, nowIso) {
         if (s.stealer_family) families.add(s.stealer_family);
         const d = String(s.date_compromised || "").slice(0, 10);
         if (d > last) last = d;
+        // 호스트 상세(피해 PC 단위). top_passwords/ip 는 Hudson Rock 이 부분 마스킹한 값만.
+        hosts.push({
+          hostId: findingId(accountMasked, String(s.computer_name || ""), `${s.date_compromised || ""}|${s.ip || ""}`),
+          accountMasked, domain,
+          computerName: s.computer_name || null,
+          operatingSystem: s.operating_system || null,
+          ip: s.ip || null,
+          dateCompromised: d || null,
+          stealerFamily: s.stealer_family || null,
+          malwarePath: s.malware_path || null,
+          antiviruses: Array.isArray(s.antiviruses) ? s.antiviruses : [],
+          totalCorporateServices: Number(s.total_corporate_services || 0),
+          totalUserServices: Number(s.total_user_services || 0),
+          topPasswords: Array.isArray(s.top_passwords) ? s.top_passwords.slice(0, 12) : [],
+          topLogins: Array.isArray(s.top_logins) ? s.top_logins.slice(0, 12) : [],
+          scannedAt: nowIso,
+        });
       }
       const dataClasses = [];
       if (hasLogin) dataClasses.push("자격증명");
@@ -380,7 +399,7 @@ async function collectCavalierAccounts(accounts, nowIso) {
     }
     await sleep(1000); // 무료 OSINT 공정사용 — ~1 req/s
   }
-  return findings;
+  return { findings, hosts };
 }
 
 // ── Intelligence X (키-게이트) → breach_findings ────────────────────────────
@@ -608,6 +627,22 @@ async function loadSupabase(scan) {
       if (res2.ok) console.log(`[supabase] infostealer_findings upsert ${infRows.length}행`);
       else console.warn(`[supabase] infostealer 적재 실패 HTTP ${res2.status} (004 마이그레이션 확인)`);
     }
+    // 감염 호스트 상세 적재 (006)
+    const hostRows = (scan.infostealerHosts ?? []).map((h) => ({
+      host_id: h.hostId, account_masked: h.accountMasked, domain: h.domain,
+      computer_name: h.computerName, operating_system: h.operatingSystem, ip: h.ip,
+      date_compromised: h.dateCompromised, stealer_family: h.stealerFamily, malware_path: h.malwarePath,
+      antiviruses: h.antiviruses, total_corporate_services: h.totalCorporateServices,
+      total_user_services: h.totalUserServices, top_passwords: h.topPasswords, top_logins: h.topLogins,
+      scanned_at: h.scannedAt,
+    }));
+    if (hostRows.length) {
+      const res3 = await fetch(`${url}/rest/v1/infostealer_hosts?on_conflict=host_id`, {
+        method: "POST", headers: sbHeaders, body: JSON.stringify(hostRows),
+      });
+      if (res3.ok) console.log(`[supabase] infostealer_hosts upsert ${hostRows.length}행`);
+      else console.warn(`[supabase] infostealer_hosts 적재 실패 HTTP ${res3.status} (006 마이그레이션 확인)`);
+    }
   } catch (err) {
     console.warn(`[supabase] 적재 건너뜀: ${err.message}`);
   }
@@ -692,6 +727,7 @@ async function main() {
 
   // ── 보조 소스 (실데이터 한정) — 키 있으면/무료면 추가 수집 후 병합 ──────────
   const provenanceExtra = [];
+  let infostealerHosts = []; // 감염 호스트 상세
   if (!isDemo) {
     // IntelX (도메인 전수, 키-게이트)
     if (INTELX_API_KEY && domains.length) {
@@ -716,13 +752,14 @@ async function main() {
         });
       }
     }
-    // Hudson Rock 계정별 인포스틸러 (무료) → breach_findings
+    // Hudson Rock 계정별 인포스틸러 (무료) → breach_findings + 호스트 상세
     if (HUDSONROCK_OSINT && accounts.length) {
       console.log(`[monitor] Hudson Rock 계정별 인포스틸러 ${accounts.length}건`);
       const hr = await collectCavalierAccounts(accounts, nowIso);
-      if (hr.length) {
-        findings.push(...hr);
-        provenanceExtra.push({ name: "Hudson Rock Cavalier (계정별)", kind: "breach", endpoint: "cavalier.hudsonrock.com /search-by-email", count: hr.length, scannedAt: nowIso });
+      infostealerHosts = hr.hosts;
+      if (hr.findings.length) {
+        findings.push(...hr.findings);
+        provenanceExtra.push({ name: "Hudson Rock Cavalier (계정별)", kind: "breach", endpoint: "cavalier.hudsonrock.com /search-by-email", count: hr.findings.length, scannedAt: nowIso });
       }
     }
   }
@@ -770,7 +807,7 @@ async function main() {
     { scannedAt: nowIso, total: summary.total, newCount: summary.newCount },
   ];
 
-  const scan = { generatedAt: nowIso, source, status, isDemo, domains, findings, summary, history, note, infostealer, sources };
+  const scan = { generatedAt: nowIso, source, status, isDemo, domains, findings, summary, history, note, infostealer, infostealerHosts, sources };
 
   await writeFile(latestFile, JSON.stringify(scan, null, 2), "utf8");
   await writeFile(join(historyDir, `breach_scan_${todayStamp()}.json`), JSON.stringify(scan, null, 2), "utf8");
