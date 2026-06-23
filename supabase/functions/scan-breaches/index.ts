@@ -357,7 +357,7 @@ async function collectGithub(domains: string[], nowIso: string): Promise<{ findi
   const findings: RawFinding[] = [];
   const seen = new Set<string>();
   for (const domain of domains) {
-    const q = encodeURIComponent(`"${domain}" password`);
+    const q = encodeURIComponent(`"@${domain}" password`); // 이메일형(@도메인)으로 노이즈 축소
     const r = await fetchJson(`${GITHUB_API}/search/code?q=${q}&per_page=20`, { headers }, { retries: 3, baseDelay: 5000 });
     // deno-lint-ignore no-explicit-any
     const items: any[] = Array.isArray(r.data?.items) ? r.data.items : [];
