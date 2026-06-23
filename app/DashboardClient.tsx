@@ -50,6 +50,20 @@ function urlKind(type?: string) {
   return { label: "고객", cls: "bg-sky-100 text-sky-700" };
 }
 
+// 계정 표시 — *@domain(특정 계정 없는 도메인 단위 노출, 예: GitHub 코드 노출)은
+// 마스킹 '*' 대신 도메인 + '도메인 노출' 배지로 제대로 보여준다. 그 외는 식별 전체 그대로.
+function AcctLabel({ accountMasked, domain }: { accountMasked: string; domain: string }) {
+  if (accountMasked.startsWith("*@")) {
+    return (
+      <>
+        <span>{domain}</span>
+        <span className="rounded bg-slate-100 px-1 py-0.5 text-[10px] font-sans font-semibold text-slate-500" title="특정 계정이 아닌 도메인 단위 노출(예: GitHub 코드)">도메인 노출</span>
+      </>
+    );
+  }
+  return <>{accountMasked}</>;
+}
+
 function fmtDate(iso: string) {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -515,9 +529,9 @@ export default function DashboardClient() {
                   return (
                     <tr key={f.id} className="border-b border-slate-100 last:border-0 hover:bg-slate-50">
                       <td className="px-5 py-3 font-mono font-semibold text-ink">
-                        <span className="inline-flex items-center gap-2">
+                        <span className="inline-flex flex-wrap items-center gap-1.5">
                           {f.isNew && <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">NEW</span>}
-                          {f.accountMasked}
+                          <AcctLabel accountMasked={f.accountMasked} domain={f.domain} />
                         </span>
                       </td>
                       <td className="px-5 py-3 text-slate-700">{f.breachTitle}</td>
@@ -554,7 +568,7 @@ export default function DashboardClient() {
                   <div className="flex items-start justify-between gap-2">
                     <span className="inline-flex flex-wrap items-center gap-1.5 break-all font-mono text-sm font-semibold text-ink">
                       {f.isNew && <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">NEW</span>}
-                      {f.accountMasked}
+                      <AcctLabel accountMasked={f.accountMasked} domain={f.domain} />
                     </span>
                     <span className={`inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-xs font-semibold ${sev.chip}`}>{sev.label}</span>
                   </div>
