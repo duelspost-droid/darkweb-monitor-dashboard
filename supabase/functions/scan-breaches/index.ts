@@ -387,8 +387,18 @@ async function collectGithub(domains: string[], nowIso: string): Promise<{ findi
 // 다크웹 유통 콤보리스트(33억 email:password 컴파일)에서 도메인 단위로 노출 계정을 열거.
 // 명부(MONITORED_EMAILS) 없이도 우리 도메인 노출 계정을 찾는다. 평문 비번은 절대 저장 안 함(분류만).
 // 주의: API 가 substring/토큰 퍼지매칭이라 반드시 email 이 정확히 @domain 으로 끝나는지 가드(없으면 무관 잡음 유입).
+// 날짜 정규화: "2019-01"/"2019" 도 유효 날짜(YYYY-MM-DD)로, 아니면 null (insert 오류 방지)
+function normBreachDate(d: unknown): string | null {
+  const s = String(d ?? "").trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  if (/^\d{4}-\d{2}$/.test(s)) return `${s}-01`;
+  if (/^\d{4}$/.test(s)) return `${s}-01-01`;
+  return null;
+}
+
 async function collectProxynovaComb(domains: string[], nowIso: string): Promise<{ findings: RawFinding[]; used: boolean; count: number }> {
   const findings: RawFinding[] = [];
+  const emails = new Set<string>(); // 노출 계정 — LeakCheck 유출이력 보강용
   for (const domain of domains) {
     const suffix = `@${domain.toLowerCase()}`;
     const seen = new Set<string>();
@@ -403,6 +413,7 @@ async function collectProxynovaComb(domains: string[], nowIso: string): Promise<
         const alias = email.slice(0, email.length - suffix.length);
         if (!alias || seen.has(email)) continue;
         seen.add(email);
+        emails.add(email);
         findings.push(await mkRawFinding({
           domain, alias,
           breachName: "콤보리스트 노출 (COMB)",
@@ -416,6 +427,29 @@ async function collectProxynovaComb(domains: string[], nowIso: string): Promise<
       await sleep(400);
     }
     await sleep(500);
+  }
+  // 유출이력 보강(LeakCheck 공개) — 각 노출 계정이 "언제·어디서(어느 유출사고)" 떴는지.
+  // 평문 비번은 받지도 저장도 안 함 — 소스명·날짜·필드분류(이메일/비밀번호 등)만. (이메일 원문 외부 조회는 운영자 승인)
+  for (const email of emails) {
+    const lc = await fetchJson(`${LEAKCHECK_BASE}/api/public?check=${encodeURIComponent(email)}`, {}, { retries: 1, baseDelay: 800 });
+    // deno-lint-ignore no-explicit-any
+    const sources: any[] = Array.isArray(lc.data?.sources) ? lc.data.sources : [];
+    const fields: string[] = Array.isArray(lc.data?.fields) ? lc.data.fields : [];
+    const at = email.indexOf("@");
+    const alias = email.slice(0, at), dm = email.slice(at + 1);
+    for (const s of sources) {
+      const name = String(s?.name ?? "").trim() || "미상 유출 출처";
+      findings.push(await mkRawFinding({
+        domain: dm, alias,
+        breachName: name,
+        breachTitle: `${name} 유출 이력`,
+        breachDate: normBreachDate(s?.date) ?? undefined,
+        dataClassesKo: mapLeakFields(fields),
+        severity: fields.includes("password") ? "high" : "medium",
+        source: "유출이력 (LeakCheck)",
+      }, nowIso, `lc|${name}`));
+    }
+    await sleep(450);
   }
   return { findings, used: true, count: findings.length };
 }

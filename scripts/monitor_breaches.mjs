@@ -565,8 +565,18 @@ async function collectGithub(domains, nowIso) {
 // ── ProxyNova COMB 콤보리스트 검색 (무료 키리스, 합법 공개) ──────────────────
 // 다크웹 유통 콤보리스트에서 도메인 단위 노출 계정 열거(명부 불필요). 평문 비번 미저장(분류만).
 // API 가 substring 퍼지매칭이라 email 이 정확히 @domain 으로 끝나는지 가드 필수.
+// 날짜 정규화: "2019-01"/"2019" 도 유효 날짜(YYYY-MM-DD)로, 아니면 null
+function normBreachDate(d) {
+  const s = String(d ?? "").trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  if (/^\d{4}-\d{2}$/.test(s)) return `${s}-01`;
+  if (/^\d{4}$/.test(s)) return `${s}-01-01`;
+  return null;
+}
+
 async function collectProxynovaComb(domains, nowIso) {
   const findings = [];
+  const emails = new Set(); // 노출 계정 — LeakCheck 유출이력 보강용
   for (const domain of domains) {
     const suffix = `@${domain.toLowerCase()}`;
     const seen = new Set();
@@ -581,6 +591,7 @@ async function collectProxynovaComb(domains, nowIso) {
         const alias = email.slice(0, email.length - suffix.length);
         if (!alias || seen.has(email)) continue;
         seen.add(email);
+        emails.add(email);
         findings.push(makeRawFinding({
           domain, alias,
           breachName: "콤보리스트 노출 (COMB)",
@@ -594,6 +605,27 @@ async function collectProxynovaComb(domains, nowIso) {
       await sleep(400);
     }
     await sleep(500);
+  }
+  // 유출이력 보강(LeakCheck 공개) — 각 노출 계정이 "언제·어디서" 떴는지. 평문 비번 미수집(소스명·날짜·필드만).
+  for (const email of emails) {
+    const lc = await fetchJson(`${LEAKCHECK_BASE}/api/public?check=${encodeURIComponent(email)}`, {}, { retries: 1, baseDelay: 800 });
+    const sources = Array.isArray(lc.data?.sources) ? lc.data.sources : [];
+    const fields = Array.isArray(lc.data?.fields) ? lc.data.fields : [];
+    const at = email.indexOf("@");
+    const alias = email.slice(0, at), dm = email.slice(at + 1);
+    for (const s of sources) {
+      const name = String(s?.name ?? "").trim() || "미상 유출 출처";
+      findings.push(makeRawFinding({
+        domain: dm, alias,
+        breachName: name,
+        breachTitle: `${name} 유출 이력`,
+        breachDate: normBreachDate(s?.date) ?? undefined,
+        dataClassesKo: mapLeakFields(fields),
+        severity: fields.includes("password") ? "high" : "medium",
+        source: "유출이력 (LeakCheck)",
+      }, nowIso, `lc|${name}`));
+    }
+    await sleep(450);
   }
   return { findings, used: true, count: findings.length };
 }
