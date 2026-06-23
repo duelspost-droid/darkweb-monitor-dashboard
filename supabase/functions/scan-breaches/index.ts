@@ -383,6 +383,43 @@ async function collectGithub(domains: string[], nowIso: string): Promise<{ findi
   return { findings, used: true, count: findings.length };
 }
 
+// ── ProxyNova COMB 콤보리스트 검색 (무료 키리스, 합법 공개) → breach_findings ──
+// 다크웹 유통 콤보리스트(33억 email:password 컴파일)에서 도메인 단위로 노출 계정을 열거.
+// 명부(MONITORED_EMAILS) 없이도 우리 도메인 노출 계정을 찾는다. 평문 비번은 절대 저장 안 함(분류만).
+// 주의: API 가 substring/토큰 퍼지매칭이라 반드시 email 이 정확히 @domain 으로 끝나는지 가드(없으면 무관 잡음 유입).
+async function collectProxynovaComb(domains: string[], nowIso: string): Promise<{ findings: RawFinding[]; used: boolean; count: number }> {
+  const findings: RawFinding[] = [];
+  for (const domain of domains) {
+    const suffix = `@${domain.toLowerCase()}`;
+    const seen = new Set<string>();
+    for (let start = 0; start < 300; start += 100) { // 우리 도메인은 소량이라 1~2페이지면 충분(안전상한 300)
+      const r = await fetchJson(`https://api.proxynova.com/comb?query=${encodeURIComponent(suffix)}&start=${start}&limit=100`, {}, { retries: 1, baseDelay: 1000 });
+      const lines: string[] = Array.isArray(r.data?.lines) ? r.data.lines : [];
+      if (!lines.length) break;
+      for (const line of lines) {
+        const i = line.indexOf(":"); // 비번에 ':' 가능 → 첫 ':' 기준 분리. 우측(평문 비번)은 폐기.
+        const email = (i === -1 ? line : line.slice(0, i)).trim().toLowerCase();
+        if (!email.endsWith(suffix)) continue; // 정확매칭 가드(퍼지매치 잡음 차단)
+        const alias = email.slice(0, email.length - suffix.length);
+        if (!alias || seen.has(email)) continue;
+        seen.add(email);
+        findings.push(await mkRawFinding({
+          domain, alias,
+          breachName: "콤보리스트 노출 (COMB)",
+          breachTitle: "다크웹 유통 콤보리스트(email:password) 노출",
+          dataClassesKo: ["이메일", "비밀번호"],
+          severity: "high",
+          source: "콤보리스트 (ProxyNova COMB)",
+        }, nowIso, "comb"));
+      }
+      if (lines.length < 100) break;
+      await sleep(400);
+    }
+    await sleep(500);
+  }
+  return { findings, used: true, count: findings.length };
+}
+
 interface Finding {
   finding_id: string; account_masked: string; account: string; domain: string; breach_name: string;
   breach_title: string; breach_date: string | null; data_classes: string[]; severity: string;
@@ -552,6 +589,11 @@ Deno.serve(async (req) => {
     if (GITHUB_TOKEN && MONITORED_DOMAINS.length) {
       const gh = await collectGithub(MONITORED_DOMAINS, nowIso);
       if (gh.used) { findings.push(...gh.findings); provenanceExtra.push({ name: "공개 노출 (GitHub)", kind: "breach", endpoint: "api.github.com /search/code", count: gh.count, scannedAt: nowIso }); }
+    }
+    // ProxyNova COMB 콤보리스트 (무료 키리스) — 도메인 단위 노출 계정 열거
+    if (MONITORED_DOMAINS.length) {
+      const cb = await collectProxynovaComb(MONITORED_DOMAINS, nowIso);
+      if (cb.used) { findings.push(...cb.findings); provenanceExtra.push({ name: "콤보리스트 (ProxyNova COMB)", kind: "breach", endpoint: "api.proxynova.com /comb", count: cb.count, scannedAt: nowIso }); }
     }
     } catch (e) {
       note = (note ? note + " | " : "") + `보조 소스 일부 실패: ${(e as Error).message}`;

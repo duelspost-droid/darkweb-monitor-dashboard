@@ -562,6 +562,42 @@ async function collectGithub(domains, nowIso) {
   return { findings, used: true, count: findings.length };
 }
 
+// ── ProxyNova COMB 콤보리스트 검색 (무료 키리스, 합법 공개) ──────────────────
+// 다크웹 유통 콤보리스트에서 도메인 단위 노출 계정 열거(명부 불필요). 평문 비번 미저장(분류만).
+// API 가 substring 퍼지매칭이라 email 이 정확히 @domain 으로 끝나는지 가드 필수.
+async function collectProxynovaComb(domains, nowIso) {
+  const findings = [];
+  for (const domain of domains) {
+    const suffix = `@${domain.toLowerCase()}`;
+    const seen = new Set();
+    for (let start = 0; start < 300; start += 100) {
+      const r = await fetchJson(`https://api.proxynova.com/comb?query=${encodeURIComponent(suffix)}&start=${start}&limit=100`, {}, { retries: 1, baseDelay: 1000 });
+      const lines = Array.isArray(r.data?.lines) ? r.data.lines : [];
+      if (!lines.length) break;
+      for (const line of lines) {
+        const i = line.indexOf(":"); // 우측(평문 비번) 폐기
+        const email = (i === -1 ? line : line.slice(0, i)).trim().toLowerCase();
+        if (!email.endsWith(suffix)) continue; // 정확매칭 가드
+        const alias = email.slice(0, email.length - suffix.length);
+        if (!alias || seen.has(email)) continue;
+        seen.add(email);
+        findings.push(makeRawFinding({
+          domain, alias,
+          breachName: "콤보리스트 노출 (COMB)",
+          breachTitle: "다크웹 유통 콤보리스트(email:password) 노출",
+          dataClassesKo: ["이메일", "비밀번호"],
+          severity: "high",
+          source: "콤보리스트 (ProxyNova COMB)",
+        }, nowIso, "comb"));
+      }
+      if (lines.length < 100) break;
+      await sleep(400);
+    }
+    await sleep(500);
+  }
+  return { findings, used: true, count: findings.length };
+}
+
 function summarize(findings, domains) {
   const bySeverity = { critical: 0, high: 0, medium: 0, low: 0 };
   const byDomainMap = new Map(domains.map((d) => [d, 0]));
@@ -790,6 +826,15 @@ async function main() {
       if (gh.used) {
         findings.push(...gh.findings);
         provenanceExtra.push({ name: "공개 노출 (GitHub)", kind: "breach", endpoint: "api.github.com /search/code", count: gh.count, scannedAt: nowIso });
+      }
+    }
+    // ProxyNova COMB 콤보리스트 (무료 키리스) → 도메인 단위 노출 계정 열거
+    if (domains.length) {
+      console.log(`[monitor] ProxyNova COMB 콤보리스트 검색 ${domains.length}개 도메인`);
+      const cb = await collectProxynovaComb(domains, nowIso);
+      if (cb.used) {
+        findings.push(...cb.findings);
+        provenanceExtra.push({ name: "콤보리스트 (ProxyNova COMB)", kind: "breach", endpoint: "api.proxynova.com /comb", count: cb.count, scannedAt: nowIso });
       }
     }
   }
