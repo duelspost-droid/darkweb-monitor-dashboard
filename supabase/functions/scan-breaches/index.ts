@@ -568,7 +568,26 @@ Deno.serve(async (req) => {
   // 적재 (정상 스캔만 DB 갱신; 오류 시 기존 데이터 보존)
   if (status === "ok") {
     try {
-      const rows = findings.map((f) => ({ ...f, last_scan_tag: scanTag }));
+      // PostgREST 벌크 upsert 는 모든 행의 키 집합이 동일해야 함(PGRST102) → 고정 컬럼으로 정규화.
+      const rows = findings.map((f) => ({
+        finding_id: f.finding_id,
+        account_masked: f.account_masked,
+        account: f.account ?? null,
+        domain: f.domain,
+        breach_name: f.breach_name,
+        breach_title: f.breach_title ?? null,
+        breach_date: f.breach_date ?? null,
+        data_classes: f.data_classes ?? [],
+        severity: f.severity,
+        is_new: f.is_new,
+        discovered_at: f.discovered_at,
+        source: f.source ?? null,
+        password_risk: f.password_risk ?? null,
+        industry: f.industry ?? null,
+        reference_url: f.reference_url ?? null,
+        breach_logo: f.breach_logo ?? null,
+        last_scan_tag: scanTag,
+      }));
       await sbUpsert(rows);
       await sbDeleteStale(scanTag);
     } catch (e) {
