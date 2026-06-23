@@ -358,7 +358,7 @@ async function collectGithub(domains: string[], nowIso: string): Promise<{ findi
   const seen = new Set<string>();
   for (const domain of domains) {
     const q = encodeURIComponent(`"@${domain}" password`); // 이메일형(@도메인)으로 노이즈 축소
-    const r = await fetchJson(`${GITHUB_API}/search/code?q=${q}&per_page=20`, { headers }, { retries: 3, baseDelay: 5000 });
+    const r = await fetchJson(`${GITHUB_API}/search/code?q=${q}&per_page=20`, { headers }, { retries: 1, baseDelay: 2000 });
     // deno-lint-ignore no-explicit-any
     const items: any[] = Array.isArray(r.data?.items) ? r.data.items : [];
     for (const it of items) {
@@ -378,7 +378,7 @@ async function collectGithub(domains: string[], nowIso: string): Promise<{ findi
         referenceUrl: url,
       }, nowIso, key));
     }
-    await sleep(7000); // 코드 검색 레이트리밋(분당 ~10) 배려
+    await sleep(1500); // 코드 검색 레이트리밋 배려(Edge 실행시간 한계 고려해 짧게)
   }
   return { findings, used: true, count: findings.length };
 }
@@ -531,6 +531,7 @@ Deno.serve(async (req) => {
     for (const f of findings) f.source = f.source || source; // 1차 소스 라벨
     primaryCount = findings.length;
 
+    try { // 보조 소스 실패가 전체 스캔을 죽이지 않도록 격리
     // IntelX (도메인 전수, 키-게이트)
     if (INTELX_API_KEY && MONITORED_DOMAINS.length) {
       const ix = await collectIntelx(MONITORED_DOMAINS, nowIso);
@@ -552,6 +553,9 @@ Deno.serve(async (req) => {
       const gh = await collectGithub(MONITORED_DOMAINS, nowIso);
       if (gh.used) { findings.push(...gh.findings); provenanceExtra.push({ name: "공개 노출 (GitHub)", kind: "breach", endpoint: "api.github.com /search/code", count: gh.count, scannedAt: nowIso }); }
     }
+    } catch (e) {
+      note = (note ? note + " | " : "") + `보조 소스 일부 실패: ${(e as Error).message}`;
+    }
 
     // 중복 제거(같은 finding_id 는 먼저 본 것 유지) + is_new
     const byId = new Map<string, RawFinding>();
@@ -563,9 +567,14 @@ Deno.serve(async (req) => {
 
   // 적재 (정상 스캔만 DB 갱신; 오류 시 기존 데이터 보존)
   if (status === "ok") {
-    const rows = findings.map((f) => ({ ...f, last_scan_tag: scanTag }));
-    await sbUpsert(rows);
-    await sbDeleteStale(scanTag);
+    try {
+      const rows = findings.map((f) => ({ ...f, last_scan_tag: scanTag }));
+      await sbUpsert(rows);
+      await sbDeleteStale(scanTag);
+    } catch (e) {
+      status = "error";
+      note = (note ? note + " | " : "") + `적재 실패: ${(e as Error).message}`;
+    }
   }
 
   // 다크웹 인포스틸러 — 도메인 전수 (Hudson Rock Cavalier, 무료) — breach 오류와 무관하게 시도

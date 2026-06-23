@@ -538,7 +538,7 @@ async function collectGithub(domains, nowIso) {
   const seen = new Set();
   for (const domain of domains) {
     const q = encodeURIComponent(`"@${domain}" password`); // 이메일형(@도메인)으로 노이즈 축소
-    const r = await fetchJson(`${GITHUB_API}/search/code?q=${q}&per_page=20`, { headers }, { retries: 3, baseDelay: 5000 });
+    const r = await fetchJson(`${GITHUB_API}/search/code?q=${q}&per_page=20`, { headers }, { retries: 1, baseDelay: 2000 });
     const items = Array.isArray(r.data?.items) ? r.data.items : [];
     for (const it of items) {
       const repo = it.repository?.full_name || "";
@@ -557,7 +557,7 @@ async function collectGithub(domains, nowIso) {
         referenceUrl: url,
       }, nowIso, key));
     }
-    await sleep(7000); // 코드 검색 레이트리밋(분당 ~10) 배려
+    await sleep(1500); // 코드 검색 레이트리밋 배려
   }
   return { findings, used: true, count: findings.length };
 }
