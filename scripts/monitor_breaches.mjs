@@ -318,7 +318,7 @@ async function collectCavalier(domains, nowIso) {
       if (!res.ok) continue;
       const d = await res.json();
       const urls = (d?.data?.all_urls ?? [])
-        .slice(0, 10)
+        .slice(0, 30)
         .map((u) => ({ url: u.url, type: u.type, occurrence: u.occurrence }));
       out.push({
         domain,

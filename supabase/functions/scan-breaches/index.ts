@@ -175,7 +175,7 @@ async function collectCavalier(domains: string[], nowIso: string): Promise<Infos
       const res = await fetch(`${CAVALIER_BASE}/search-by-domain?domain=${encodeURIComponent(domain)}`, { headers: { "user-agent": UA } });
       if (!res.ok) continue;
       const d = await res.json();
-      const urls = (d?.data?.all_urls ?? []).slice(0, 10).map((u: { url: string; type: string; occurrence: number }) => ({ url: u.url, type: u.type, occurrence: u.occurrence }));
+      const urls = (d?.data?.all_urls ?? []).slice(0, 30).map((u: { url: string; type: string; occurrence: number }) => ({ url: u.url, type: u.type, occurrence: u.occurrence }));
       out.push({
         domain, source: "Hudson Rock Cavalier",
         total: d.total ?? 0, employees: d.employees ?? 0, users: d.users ?? 0,

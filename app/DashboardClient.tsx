@@ -42,6 +42,14 @@ const INSTITUTIONS: Record<string, string> = {
   "wooricap.com": "JB우리캐피탈",
 };
 
+// 탈취 URL 유형 분류 (Hudson Rock 은 Employee/User/Third-party 등 대소문자 혼재로 반환).
+function urlKind(type?: string) {
+  const t = (type ?? "").toLowerCase();
+  if (t.startsWith("emp")) return { label: "직원", cls: "bg-rose-100 text-rose-700" };
+  if (t.startsWith("third") || t.includes("party")) return { label: "서드파티", cls: "bg-violet-100 text-violet-700" };
+  return { label: "고객", cls: "bg-sky-100 text-sky-700" };
+}
+
 function fmtDate(iso: string) {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -394,6 +402,11 @@ export default function DashboardClient() {
     })
     .sort((a, b) => b.breach + b.infoTotal - (a.breach + a.infoTotal));
 
+  // 인포스틸러 감염 유형 집계 (대응 우선순위 판단용)
+  const infoEmp = infostealer.reduce((s, i) => s + (i.employees || 0), 0);
+  const infoUsr = infostealer.reduce((s, i) => s + (i.users || 0), 0);
+  const info3p = infostealer.reduce((s, i) => s + (i.thirdParties || 0), 0);
+
   return (
     <div className="space-y-7 pb-14">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -576,6 +589,20 @@ export default function DashboardClient() {
           <p className="py-6 text-center text-sm text-muted">인포스틸러 데이터 없음.</p>
         ) : (
           <div className="space-y-5">
+            <div className={`rounded-xl border p-4 ${infoEmp > 0 ? "border-rose-300 bg-rose-50" : "border-amber-200 bg-amber-50"}`}>
+              <div className="flex items-start gap-2">
+                {infoEmp > 0 ? <ShieldAlert size={18} className="mt-0.5 shrink-0 text-rose-600" aria-hidden /> : <Info size={18} className="mt-0.5 shrink-0 text-amber-600" aria-hidden />}
+                <div className="text-sm leading-6 text-slate-700">
+                  <div className="font-bold text-ink">현재 상황 · 대응 우선순위</div>
+                  <p className="mt-0.5">총 <strong>{infoTotal.toLocaleString()}건</strong> — 임직원 단말 <strong className={infoEmp > 0 ? "text-rose-700" : ""}>{infoEmp}</strong> · 고객/사용자 <strong className="text-amber-700">{infoUsr.toLocaleString()}</strong> · 서드파티 {info3p}.</p>
+                  <p className="mt-1">
+                    {infoEmp > 0
+                      ? <><strong className="text-rose-700">사내 단말 감염 발견</strong> — 직원 계정·세션 탈취 위험. 아래 「대응 가이드」의 직원 단말 절차를 즉시 수행하세요.</>
+                      : <>사내 단말 침해는 <strong>없으나</strong>, 고객 PC 감염으로 <strong className="text-ink">인터넷뱅킹 로그인 자격증명이 대량 탈취</strong>됐습니다 → 고객 계정 보호·이상거래(FDS) 대응이 우선입니다.</>}
+                  </p>
+                </div>
+              </div>
+            </div>
             {infoItems.length > 0 && <BarList items={infoItems} />}
             <div className="grid gap-3 md:grid-cols-2">
               {infostealer.filter((i) => i.total > 0).sort((a, b) => b.total - a.total).map((i) => {
@@ -603,18 +630,29 @@ export default function DashboardClient() {
                       <span className="text-amber-700">● 사용자 {i.users}</span>
                       <span className="text-sky-700">● 서드파티 {i.thirdParties}</span>
                     </div>
+                    {/* 상황 해석 */}
+                    <div className="mt-2 rounded-lg bg-white/70 px-2.5 py-1.5 text-[11px] leading-5 text-slate-600">
+                      {i.employees > 0
+                        ? <span className="font-semibold text-rose-700">⚠ 사내 단말 {i.employees}대 감염 — 직원 계정 탈취 가능, IT보안 즉시 대응</span>
+                        : <>고객/외부 단말 감염으로 <strong className="text-slate-800">{INSTITUTIONS[i.domain] ?? i.domain} 로그인 자격증명</strong>이 탈취됨 (사내 단말 0)</>}
+                    </div>
                     {i.affectedUrls.length > 0 && (
-                      <div className="mt-3 border-t border-slate-200 pt-2">
-                        <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted">스틸러 로그에 잡힌 로그인 URL</div>
+                      <div className="mt-2 border-t border-slate-200 pt-2">
+                        <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                          <FileWarning size={11} className="text-amber-500" aria-hidden /> 자격증명이 탈취된 로그인 페이지 · 집중 보호 대상
+                        </div>
                         <ul className="space-y-1">
-                          {i.affectedUrls.slice(0, 6).map((u) => (
-                            <li key={u.url} className="flex items-center gap-2 text-[11px]">
-                              <span className={`shrink-0 rounded px-1 py-0.5 text-[9px] font-bold ${u.type === "employee" ? "bg-rose-100 text-rose-700" : "bg-sky-100 text-sky-700"}`}>{u.type === "employee" ? "직원" : "고객"}</span>
-                              <span className="truncate font-mono text-slate-600">{u.url}</span>
-                              <span className="ml-auto shrink-0 text-muted">{u.occurrence}회</span>
-                            </li>
-                          ))}
-                          {i.affectedUrls.length > 6 && <li className="text-[10px] text-muted">+{i.affectedUrls.length - 6}개 더</li>}
+                          {i.affectedUrls.slice(0, 10).map((u) => {
+                            const k = urlKind(u.type);
+                            return (
+                              <li key={u.url} className="flex items-center gap-2 text-[11px]">
+                                <span className={`shrink-0 rounded px-1 py-0.5 text-[9px] font-bold ${k.cls}`}>{k.label}</span>
+                                <span className="truncate font-mono text-slate-600">{u.url}</span>
+                                <span className="ml-auto shrink-0 text-muted">{u.occurrence.toLocaleString()}회</span>
+                              </li>
+                            );
+                          })}
+                          {i.affectedUrls.length > 10 && <li className="text-[10px] text-muted">+{i.affectedUrls.length - 10}개 더</li>}
                         </ul>
                       </div>
                     )}
@@ -689,6 +727,50 @@ export default function DashboardClient() {
             ))}
           </div>
         )}
+      </Panel>
+
+      <Panel title="대응 가이드" subtitle="인포스틸러 감염 유형별 권고 조치 — 발견 시 이렇게 대응합니다">
+        <div className="space-y-3">
+          <div className="rounded-xl border border-rose-200 bg-rose-50/50 p-4">
+            <div className="flex flex-wrap items-center gap-2 text-sm font-bold text-rose-800">
+              <Monitor size={15} aria-hidden /> 임직원 단말 감염 (사내 침해)
+              {infoEmp > 0
+                ? <span className="rounded-full bg-rose-600 px-2 py-0.5 text-[10px] font-bold text-white">현재 {infoEmp}건</span>
+                : <span className="rounded-full bg-teal-100 px-2 py-0.5 text-[10px] font-bold text-teal-700">현재 0건</span>}
+            </div>
+            <ol className="mt-2 list-decimal space-y-1 pl-5 text-[13px] leading-6 text-slate-700">
+              <li>해당 단말 <strong>즉시 네트워크 격리</strong> + 보안팀 포렌식 (감염 시점·탈취 범위 확인)</li>
+              <li>그 직원의 <strong>전 계정 비밀번호 재설정 + MFA 재등록</strong> (사내 SSO·메일·VPN·업무시스템)</li>
+              <li><strong>활성 세션·토큰 전면 무효화</strong> (쿠키 탈취 시 비번 변경만으론 재로그인 차단 안 됨)</li>
+              <li>단말 <strong>포맷/재설치</strong> 후 복귀, 동일 비번 재사용 계정 점검</li>
+              <li>탈취 자격증명으로의 횡적 이동·이상 접근 로그 조사</li>
+            </ol>
+          </div>
+          <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-4">
+            <div className="flex flex-wrap items-center gap-2 text-sm font-bold text-amber-800">
+              <ShieldAlert size={15} aria-hidden /> 고객/사용자 단말 감염 (자격증명 탈취)
+              {infoUsr > 0 && <span className="rounded-full bg-amber-600 px-2 py-0.5 text-[10px] font-bold text-white">현재 {infoUsr.toLocaleString()}건</span>}
+            </div>
+            <p className="mt-1 text-[12px] text-slate-600">고객 PC가 감염돼 우리 서비스 로그인 정보가 탈취된 경우(직접 침해는 아니나 계정 도용·이상거래 위험).</p>
+            <ol className="mt-2 list-decimal space-y-1 pl-5 text-[13px] leading-6 text-slate-700">
+              <li>위 「탈취된 로그인 페이지」 대상으로 <strong>이상거래탐지(FDS) 룰 강화</strong> + 의심 세션·IP 차단</li>
+              <li>영향 가능 계정 <strong>비밀번호 강제 재설정·재로그인 유도</strong>, 해당 로그인에 <strong>step-up 인증</strong>(추가 OTP·기기인증) 적용</li>
+              <li>고객 <strong>보안 통지</strong>: 개인 PC 백신 정밀검사·비번 변경·동일 비번 타 서비스 점검 안내</li>
+              <li>탈취 URL 집중 모니터링(자동입력·비정상 로그인 패턴 탐지)</li>
+            </ol>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <div className="flex flex-wrap items-center gap-2 text-sm font-bold text-slate-700">
+              <Globe size={15} aria-hidden /> 서드파티 단말 감염
+              {info3p > 0 && <span className="rounded-full bg-slate-500 px-2 py-0.5 text-[10px] font-bold text-white">현재 {info3p}건</span>}
+            </div>
+            <ol className="mt-2 list-decimal space-y-1 pl-5 text-[13px] leading-6 text-slate-700">
+              <li>협력사·외주 단말로 추정 → 해당 업체 보안 점검 요청, 우리 시스템 접근 권한·세션 재검토</li>
+              <li>외부 접근 경로(파트너 포털·API) 모니터링 강화</li>
+            </ol>
+          </div>
+          <p className="flex gap-2 rounded-lg bg-slate-100 px-3 py-2 text-[12px] leading-5 text-slate-600"><Info size={14} className="mt-0.5 shrink-0 text-sky-600" aria-hidden /><span><strong>비번 변경만으론 부족한 이유</strong> — 인포스틸러는 <strong>세션 쿠키·토큰</strong>까지 탈취하므로 공격자는 비번 없이 기존 세션으로 로그인할 수 있습니다. 반드시 <strong>세션 무효화 + MFA</strong>를 병행하세요.</span></p>
+        </div>
       </Panel>
 
       {sources.length > 0 && (
