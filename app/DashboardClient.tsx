@@ -396,9 +396,9 @@ export default function DashboardClient() {
 
   return (
     <div className="space-y-7 pb-14">
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="inline-flex items-center gap-1.5 rounded-full border border-rose-300 bg-rose-50 px-3 py-1 text-xs font-bold text-rose-700">
-          <Lock size={12} aria-hidden /> 관리자 전용 · 식별 데이터 (외부 공유 금지)
+          <Lock size={12} className="shrink-0" aria-hidden /> 관리자 전용 · 외부 공유 금지
         </span>
         <div className="flex items-center gap-2">
           <button
@@ -479,8 +479,9 @@ export default function DashboardClient() {
       </section>
 
       <Panel title="유출 계정 상세 (식별)" subtitle="관리자 인증 뒤 회사 계정을 식별 표시합니다." right={<span className="chip chip-neutral">총 {summary.total}건</span>} bodyClassName="p-0">
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[720px] text-sm">
+        {/* 데스크톱: 테이블 */}
+        <div className="hidden overflow-x-auto sm:block">
+          <table className="w-full min-w-[640px] text-sm">
             <thead>
               <tr className="border-b border-slate-200 text-left text-xs font-semibold uppercase tracking-wide text-muted">
                 <th className="px-5 py-3">계정</th>
@@ -523,6 +524,36 @@ export default function DashboardClient() {
               )}
             </tbody>
           </table>
+        </div>
+        {/* 모바일: 카드 */}
+        <div className="space-y-2 p-4 sm:hidden">
+          {scan.findings.length === 0 ? (
+            <p className="py-6 text-center text-sm text-muted">노출된 계정이 없습니다. 👍</p>
+          ) : (
+            scan.findings.map((f) => {
+              const sev = SEVERITY_META[f.severity];
+              return (
+                <div key={f.id} className="rounded-lg border border-slate-100 bg-slate-50 p-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="inline-flex flex-wrap items-center gap-1.5 break-all font-mono text-sm font-semibold text-ink">
+                      {f.isNew && <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">NEW</span>}
+                      {f.accountMasked}
+                    </span>
+                    <span className={`inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-xs font-semibold ${sev.chip}`}>{sev.label}</span>
+                  </div>
+                  <div className="mt-1.5 text-sm text-slate-700">{f.breachTitle} <span className="text-xs text-muted">· {f.breachDate || "—"}</span></div>
+                  {f.dataClasses.length > 0 && (
+                    <div className="mt-1.5 flex flex-wrap gap-1">
+                      {f.dataClasses.map((dc) => (
+                        <span key={dc} className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] text-slate-600">{dc}</span>
+                      ))}
+                    </div>
+                  )}
+                  <div className="mt-1.5 text-[11px] text-muted">출처: {f.source}</div>
+                </div>
+              );
+            })
+          )}
         </div>
       </Panel>
 
@@ -662,7 +693,7 @@ export default function DashboardClient() {
 
       {sources.length > 0 && (
         <Panel title="수집 출처" subtitle="어떤 인텔리전스 소스에서 언제 수집했는지 기록">
-          <div className="overflow-x-auto">
+          <div className="hidden overflow-x-auto sm:block">
             <table className="w-full min-w-[560px] text-sm">
               <thead>
                 <tr className="border-b border-slate-200 text-left text-xs font-semibold uppercase tracking-wide text-muted">
@@ -681,6 +712,19 @@ export default function DashboardClient() {
                 ))}
               </tbody>
             </table>
+          </div>
+          {/* 모바일: 카드 */}
+          <div className="space-y-2 sm:hidden">
+            {sources.map((s) => (
+              <div key={s.name} className="rounded-lg border border-slate-100 bg-slate-50 p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-ink"><Database size={13} className="shrink-0 text-slate-400" aria-hidden />{s.name}</span>
+                  <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${s.kind === "infostealer" ? "border-rose-300 bg-rose-100 text-rose-700" : "border-sky-300 bg-sky-100 text-sky-700"}`}>{s.kind === "infostealer" ? "인포스틸러" : "데이터 유출"}</span>
+                </div>
+                <div className="mt-1 break-all font-mono text-[11px] text-muted">{s.endpoint}</div>
+                <div className="mt-1 text-[11px] text-muted">수집 {s.count.toLocaleString()}건 · {fmtDate(s.scannedAt)}</div>
+              </div>
+            ))}
           </div>
         </Panel>
       )}
