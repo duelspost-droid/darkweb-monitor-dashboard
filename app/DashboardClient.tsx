@@ -63,7 +63,7 @@ async function fetchScan(): Promise<BreachScan> {
     supabase
       .from("breach_findings")
       .select(
-        "finding_id,account_masked,account,domain,breach_name,breach_title,breach_date,data_classes,severity,is_new,discovered_at,source"
+        "finding_id,account_masked,account,domain,breach_name,breach_title,breach_date,data_classes,severity,is_new,discovered_at,source,reference_url"
       ),
     supabase.from("scan_runs").select("*").order("scanned_at", { ascending: false }).limit(30),
     supabase.from("infostealer_findings").select("*").order("total", { ascending: false }),
@@ -87,6 +87,7 @@ async function fetchScan(): Promise<BreachScan> {
     isNew: !!r.is_new,
     discoveredAt: r.discovered_at,
     source: r.source ?? "",
+    referenceUrl: r.reference_url ?? undefined,
   }));
   findings.sort((a, b) => {
     if (a.isNew !== b.isNew) return a.isNew ? -1 : 1;
@@ -530,7 +531,10 @@ export default function DashboardClient() {
                         </div>
                       </td>
                       <td className="px-5 py-3"><span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-semibold ${sev.chip}`}>{sev.label}</span></td>
-                      <td className="px-5 py-3 text-[11px] text-muted">{f.source}</td>
+                      <td className="px-5 py-3 text-[11px] text-muted">
+                        {f.source}
+                        {f.referenceUrl && <a href={f.referenceUrl} target="_blank" rel="noreferrer" className="ml-1.5 font-semibold text-sky-600 hover:underline">↗ 열기</a>}
+                      </td>
                     </tr>
                   );
                 })
@@ -562,7 +566,7 @@ export default function DashboardClient() {
                       ))}
                     </div>
                   )}
-                  <div className="mt-1.5 text-[11px] text-muted">출처: {f.source}</div>
+                  <div className="mt-1.5 text-[11px] text-muted">출처: {f.source}{f.referenceUrl && <a href={f.referenceUrl} target="_blank" rel="noreferrer" className="ml-1.5 font-semibold text-sky-600 hover:underline">↗ 열기</a>}</div>
                 </div>
               );
             })

@@ -43,6 +43,8 @@ const INTELX_HOST = process.env.INTELX_API_HOST?.trim() || "https://2.intelx.io"
 const INTELX_BUCKETS = (process.env.INTELX_BUCKETS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
 const LEAKCHECK_API_KEY = process.env.LEAKCHECK_API_KEY?.trim();
 const HUDSONROCK_OSINT = (process.env.HUDSONROCK_OSINT_ENABLED ?? "1") !== "0";
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN?.trim();
+const GITHUB_API = "https://api.github.com";
 
 // LeakCheck 노출 필드(카테고리) → 한글. 값 자체는 저장하지 않는다(분류만).
 const LEAK_FIELD_KO = {
@@ -290,7 +292,7 @@ function makeFinding(domain, alias, breachName, meta, nowIso) {
 
 // 카탈로그 없이 보조 소스(Hudson Rock 계정별·IntelX·LeakCheck)가 직접 finding 을 만들 때 사용.
 // dataClasses 는 이미 한글 분류, severity 도 직접 지정. idSeed 로 finding_id 충돌 방지(소스별 레코드).
-function makeRawFinding({ domain, alias, breachName, breachTitle, breachDate, dataClassesKo, severity, source }, nowIso, idSeed = "") {
+function makeRawFinding({ domain, alias, breachName, breachTitle, breachDate, dataClassesKo, severity, source, referenceUrl }, nowIso, idSeed = "") {
   const aliasKey = alias || "*";
   return {
     id: findingId(domain, aliasKey, idSeed ? `${breachName}|${idSeed}` : breachName),
@@ -304,6 +306,7 @@ function makeRawFinding({ domain, alias, breachName, breachTitle, breachDate, da
     isNew: false,
     discoveredAt: nowIso,
     source,
+    referenceUrl: referenceUrl || "",
   };
 }
 
@@ -521,6 +524,44 @@ async function collectLeakcheck(domains, accounts, nowIso) {
   return { findings: [], used: false, count: 0, mode: "" };
 }
 
+// ── GitHub 공개 노출 검색 (키-게이트) → breach_findings ──────────────────────
+// 공개 GitHub 코드에서 도메인+자격증명 키워드 검색. 자격증명 값은 저장하지 않고
+// repo/파일/URL 포인터만 남긴다(관리자 수동 검토용).
+async function collectGithub(domains, nowIso) {
+  if (!GITHUB_TOKEN) return { findings: [], used: false, count: 0 };
+  const headers = {
+    Authorization: `Bearer ${GITHUB_TOKEN}`,
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+  const findings = [];
+  const seen = new Set();
+  for (const domain of domains) {
+    const q = encodeURIComponent(`"${domain}" password`);
+    const r = await fetchJson(`${GITHUB_API}/search/code?q=${q}&per_page=20`, { headers }, { retries: 3, baseDelay: 5000 });
+    const items = Array.isArray(r.data?.items) ? r.data.items : [];
+    for (const it of items) {
+      const repo = it.repository?.full_name || "";
+      const path = it.path || "";
+      const url = it.html_url || "";
+      const key = `${repo}/${path}`;
+      if (!repo || seen.has(key)) continue;
+      seen.add(key);
+      findings.push(makeRawFinding({
+        domain, alias: "*",
+        breachName: "GitHub 공개 노출",
+        breachTitle: `${repo} · ${path}`.slice(0, 120),
+        dataClassesKo: ["공개 코드 노출", "자격증명 의심"],
+        severity: "high",
+        source: "공개 노출 (GitHub)",
+        referenceUrl: url,
+      }, nowIso, key));
+    }
+    await sleep(7000); // 코드 검색 레이트리밋(분당 ~10) 배려
+  }
+  return { findings, used: true, count: findings.length };
+}
+
 function summarize(findings, domains) {
   const bySeverity = { critical: 0, high: 0, medium: 0, low: 0 };
   const byDomainMap = new Map(domains.map((d) => [d, 0]));
@@ -582,6 +623,7 @@ async function loadSupabase(scan) {
       is_new: f.isNew,
       discovered_at: f.discoveredAt,
       source: f.source,
+      reference_url: f.referenceUrl || null,
     }));
     if (rows.length) {
       const res = await fetch(`${url}/rest/v1/breach_findings?on_conflict=finding_id`, {
@@ -739,6 +781,15 @@ async function main() {
       if (hr.findings.length) {
         findings.push(...hr.findings);
         provenanceExtra.push({ name: "Hudson Rock Cavalier (계정별)", kind: "breach", endpoint: "cavalier.hudsonrock.com /search-by-email", count: hr.findings.length, scannedAt: nowIso });
+      }
+    }
+    // GitHub 공개 노출 (키-게이트, 무료 합법 크롤링) → breach_findings
+    if (GITHUB_TOKEN && domains.length) {
+      console.log(`[monitor] GitHub 공개 노출 검색 ${domains.length}개 도메인`);
+      const gh = await collectGithub(domains, nowIso);
+      if (gh.used) {
+        findings.push(...gh.findings);
+        provenanceExtra.push({ name: "공개 노출 (GitHub)", kind: "breach", endpoint: "api.github.com /search/code", count: gh.count, scannedAt: nowIso });
       }
     }
   }

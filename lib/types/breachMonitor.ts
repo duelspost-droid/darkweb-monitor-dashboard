@@ -21,8 +21,10 @@ export interface BreachFinding {
   // 직전 스캔 대비 새로 발견된 항목 여부
   isNew: boolean;
   discoveredAt: string;
-  // 수집 출처 (예: "XposedOrNot", "Have I Been Pwned")
+  // 수집 출처 (예: "XposedOrNot", "Have I Been Pwned", "공개 노출 (GitHub)")
   source: string;
+  // 참고 링크 (예: GitHub 노출 파일 URL) — 있으면 표시
+  referenceUrl?: string;
 }
 
 // 다크웹 인포스틸러(악성코드) 감염 — 도메인 전수 집계 (Hudson Rock Cavalier).

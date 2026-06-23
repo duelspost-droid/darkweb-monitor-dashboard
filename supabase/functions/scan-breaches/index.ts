@@ -35,6 +35,8 @@ const INTELX_HOST = Deno.env.get("INTELX_API_HOST")?.trim() || "https://2.intelx
 const INTELX_BUCKETS = (Deno.env.get("INTELX_BUCKETS") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
 const LEAKCHECK_API_KEY = Deno.env.get("LEAKCHECK_API_KEY")?.trim();
 const HUDSONROCK_OSINT = (Deno.env.get("HUDSONROCK_OSINT_ENABLED") ?? "1") !== "0";
+const GITHUB_TOKEN = Deno.env.get("GITHUB_TOKEN")?.trim();
+const GITHUB_API = "https://api.github.com";
 
 const LEAK_FIELD_KO: Record<string, string> = {
   password: "비밀번호", username: "사용자명", email: "이메일", phone: "전화번호",
@@ -344,6 +346,43 @@ async function collectLeakcheck(domains: string[], accounts: string[], nowIso: s
   return { findings: [], used: false, count: 0, mode: "" };
 }
 
+// ── GitHub 공개 노출 검색 (키-게이트, 무료 합법) → breach_findings ───────────
+async function collectGithub(domains: string[], nowIso: string): Promise<{ findings: RawFinding[]; used: boolean; count: number }> {
+  if (!GITHUB_TOKEN) return { findings: [], used: false, count: 0 };
+  const headers = {
+    Authorization: `Bearer ${GITHUB_TOKEN}`,
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+  const findings: RawFinding[] = [];
+  const seen = new Set<string>();
+  for (const domain of domains) {
+    const q = encodeURIComponent(`"${domain}" password`);
+    const r = await fetchJson(`${GITHUB_API}/search/code?q=${q}&per_page=20`, { headers }, { retries: 3, baseDelay: 5000 });
+    // deno-lint-ignore no-explicit-any
+    const items: any[] = Array.isArray(r.data?.items) ? r.data.items : [];
+    for (const it of items) {
+      const repo = it.repository?.full_name || "";
+      const path = it.path || "";
+      const url = it.html_url || "";
+      const key = `${repo}/${path}`;
+      if (!repo || seen.has(key)) continue;
+      seen.add(key);
+      findings.push(await mkRawFinding({
+        domain, alias: "*",
+        breachName: "GitHub 공개 노출",
+        breachTitle: `${repo} · ${path}`.slice(0, 120),
+        dataClassesKo: ["공개 코드 노출", "자격증명 의심"],
+        severity: "high",
+        source: "공개 노출 (GitHub)",
+        referenceUrl: url,
+      }, nowIso, key));
+    }
+    await sleep(7000); // 코드 검색 레이트리밋(분당 ~10) 배려
+  }
+  return { findings, used: true, count: findings.length };
+}
+
 interface Finding {
   finding_id: string; account_masked: string; account: string; domain: string; breach_name: string;
   breach_title: string; breach_date: string | null; data_classes: string[]; severity: string;
@@ -366,7 +405,7 @@ async function mkFinding(domain: string, alias: string, name: string, meta: Cata
 // 카탈로그 없이 보조 소스가 직접 finding 을 만들 때 사용. dataClasses 는 이미 한글 분류.
 // idSeed 로 finding_id 충돌 방지(소스별 레코드). alias="*" = 도메인 단위(특정 계정 없음).
 async function mkRawFinding(
-  o: { domain: string; alias: string; breachName: string; breachTitle?: string; breachDate?: string; dataClassesKo: string[]; severity: string; source: string },
+  o: { domain: string; alias: string; breachName: string; breachTitle?: string; breachDate?: string; dataClassesKo: string[]; severity: string; source: string; referenceUrl?: string },
   nowIso: string, idSeed = "",
 ): Promise<Finding & { is_new: boolean; discovered_at: string }> {
   const aliasKey = o.alias || "*";
@@ -376,7 +415,7 @@ async function mkRawFinding(
     account: aliasKey === "*" ? "" : `${aliasKey}@${o.domain}`,
     domain: o.domain, breach_name: o.breachName, breach_title: o.breachTitle || o.breachName,
     breach_date: o.breachDate || null, data_classes: o.dataClassesKo, severity: o.severity,
-    source: o.source, is_new: false, discovered_at: nowIso,
+    reference_url: o.referenceUrl, source: o.source, is_new: false, discovered_at: nowIso,
   };
 }
 
@@ -507,6 +546,11 @@ Deno.serve(async (req) => {
       const hr = await collectCavalierAccounts(MONITORED_EMAILS, nowIso);
       infostealerHosts = hr.hosts;
       if (hr.findings.length) { findings.push(...hr.findings); provenanceExtra.push({ name: "Hudson Rock Cavalier (계정별)", kind: "breach", endpoint: "cavalier.hudsonrock.com /search-by-email", count: hr.findings.length, scannedAt: nowIso }); }
+    }
+    // GitHub 공개 노출 (키-게이트, 무료 합법 크롤링)
+    if (GITHUB_TOKEN && MONITORED_DOMAINS.length) {
+      const gh = await collectGithub(MONITORED_DOMAINS, nowIso);
+      if (gh.used) { findings.push(...gh.findings); provenanceExtra.push({ name: "공개 노출 (GitHub)", kind: "breach", endpoint: "api.github.com /search/code", count: gh.count, scannedAt: nowIso }); }
     }
 
     // 중복 제거(같은 finding_id 는 먼저 본 것 유지) + is_new
