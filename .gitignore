@@ -15,3 +15,5 @@ data/security/*.local.*
 # 로컬 스캔 산출물 — Supabase 백엔드로 전환돼 커밋 불필요(대시보드는 DB에서 직접 조회).
 data/security/latest_breach_scan.json
 data/security/history/
+# 내부망(망분리) 전용 IR 도구 — 공개 레포에 올리지 않음. JB 보호망으로 옮겨 사용.
+internal-tools/
