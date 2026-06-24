@@ -351,7 +351,7 @@ async function collectCavalierAccounts(accounts, nowIso) {
     const email = String(acct).trim().toLowerCase();
     const [alias, domain] = email.split("@");
     if (!alias || !domain) continue;
-    const r = await fetchJson(`${CAVALIER_BASE}/search-by-email?email=${encodeURIComponent(email)}`);
+    const r = await fetchJson(`${CAVALIER_BASE}/search-by-email?email=${encodeURIComponent(email)}`, {}, { retries: 3, baseDelay: 1500 }); // #6 레이트리밋 백오프
     const stealers = Array.isArray(r.data?.stealers) ? r.data.stealers : [];
     if (stealers.length) {
       const accountMasked = `${maskLocalPart(alias)}@${domain}`;
@@ -620,46 +620,39 @@ async function collectProxynovaComb(domains, nowIso) {
     }
     await sleep(500);
   }
-  // 유출이력 보강 — 각 노출 계정이 "언제·어디서" 떴는지. 평문 미수집(소스명·날짜·필드만).
-  // LeakCheck + XposedOrNot 두 카탈로그로 커버리지 극대화. (이메일 원문 외부 조회는 운영자 승인)
-  const xonCatalog = await loadXonCatalog();
-  for (const email of emails) {
-    const at = email.indexOf("@");
-    const alias = email.slice(0, at), dm = email.slice(at + 1);
-    // (a) LeakCheck 공개
-    const lc = await fetchJson(`${LEAKCHECK_BASE}/api/public?check=${encodeURIComponent(email)}`, {}, { retries: 1, baseDelay: 800 });
-    const sources = Array.isArray(lc.data?.sources) ? lc.data.sources : [];
-    const fields = Array.isArray(lc.data?.fields) ? lc.data.fields : [];
-    for (const s of sources) {
-      const name = String(s?.name ?? "").trim() || "미상 유출 출처";
-      findings.push(makeRawFinding({
-        domain: dm, alias,
-        breachName: name,
-        breachTitle: `${name} 유출 이력`,
-        breachDate: normBreachDate(s?.date) ?? undefined,
-        dataClassesKo: mapLeakFields(fields),
-        severity: fields.includes("password") ? "high" : "medium",
-        source: "유출이력 (LeakCheck)",
-      }, nowIso, `lc|${name}`));
+  // 보강 병렬(#4): 유출이력(LeakCheck+XON) ∥ 인포스틸러 교차(Hudson Rock) — 다른 서비스라 동시 실행. 평문 미수집.
+  const emailArr = [...emails];
+  const enrichBreachHistory = async () => {
+    const out = [];
+    const xonCatalog = await loadXonCatalog();
+    for (const email of emailArr) {
+      const at = email.indexOf("@");
+      const alias = email.slice(0, at), dm = email.slice(at + 1);
+      const [lc, xnames] = await Promise.all([
+        fetchJson(`${LEAKCHECK_BASE}/api/public?check=${encodeURIComponent(email)}`, {}, { retries: 1, baseDelay: 800 }),
+        xonCheckEmail(email),
+      ]);
+      const sources = Array.isArray(lc.data?.sources) ? lc.data.sources : [];
+      const fields = Array.isArray(lc.data?.fields) ? lc.data.fields : [];
+      for (const s of sources) {
+        const name = String(s?.name ?? "").trim() || "미상 유출 출처";
+        out.push(makeRawFinding({ domain: dm, alias, breachName: name, breachTitle: `${name} 유출 이력`, breachDate: normBreachDate(s?.date) ?? undefined, dataClassesKo: mapLeakFields(fields), severity: fields.includes("password") ? "high" : "medium", source: "유출이력 (LeakCheck)" }, nowIso, `lc|${name}`));
+      }
+      for (const name of xnames) {
+        const meta = xonCatalog.get(name);
+        const dc = meta?.dataClasses ?? [];
+        out.push(makeRawFinding({ domain: dm, alias, breachName: name, breachTitle: meta?.title ? `${meta.title} 유출 이력` : `${name} 유출 이력`, breachDate: normBreachDate(meta?.date) ?? undefined, dataClassesKo: dc.length ? koDataClasses(dc) : ["유출 기록"], severity: dc.length ? severityForDataClasses(dc) : "medium", source: "유출이력 (XposedOrNot)" }, nowIso, `xon|${name}`));
+      }
+      await sleep(300);
     }
-    // (b) XposedOrNot — 다른 카탈로그라 LeakCheck 미커버 계정의 사건·날짜를 추가 확보
-    const xnames = await xonCheckEmail(email);
-    for (const name of xnames) {
-      const meta = xonCatalog.get(name);
-      const dc = meta?.dataClasses ?? [];
-      findings.push(makeRawFinding({
-        domain: dm, alias,
-        breachName: name,
-        breachTitle: meta?.title ? `${meta.title} 유출 이력` : `${name} 유출 이력`,
-        breachDate: normBreachDate(meta?.date) ?? undefined,
-        dataClassesKo: dc.length ? koDataClasses(dc) : ["유출 기록"],
-        severity: dc.length ? severityForDataClasses(dc) : "medium",
-        source: "유출이력 (XposedOrNot)",
-      }, nowIso, `xon|${name}`));
-    }
-    await sleep(350);
-  }
-  return { findings, used: true, count: findings.length, emails: [...emails] };
+    return out;
+  };
+  const [enrichFindings, cav] = await Promise.all([
+    enrichBreachHistory(),
+    HUDSONROCK_OSINT ? collectCavalierAccounts(emailArr, nowIso) : Promise.resolve({ findings: [], hosts: [] }),
+  ]);
+  findings.push(...enrichFindings, ...cav.findings);
+  return { findings, used: true, count: findings.length, emails: emailArr, hosts: cav.hosts };
 }
 
 function summarize(findings, domains) {
@@ -897,17 +890,12 @@ async function main() {
       console.log(`[monitor] ProxyNova COMB 콤보리스트 검색 ${domains.length}개 도메인`);
       const cb = await collectProxynovaComb(domains, nowIso);
       if (cb.used) {
+        // cb.findings = COMB + 유출이력(LeakCheck/XON) + 인포스틸러 교차(병렬수집)
         findings.push(...cb.findings);
         provenanceExtra.push({ name: "콤보리스트 (ProxyNova COMB)", kind: "breach", endpoint: "api.proxynova.com /comb", count: cb.count, scannedAt: nowIso });
-        // 인포스틸러 교차매핑: COMB 발견 계정도 Hudson Rock search-by-email 으로 조회
-        if (HUDSONROCK_OSINT && cb.emails.length) {
-          console.log(`[monitor] Hudson Rock COMB 계정 교차 ${cb.emails.length}건`);
-          const hx = await collectCavalierAccounts(cb.emails, nowIso);
-          if (hx.findings.length) {
-            findings.push(...hx.findings);
-            provenanceExtra.push({ name: "Hudson Rock Cavalier (COMB 계정 교차)", kind: "breach", endpoint: "cavalier.hudsonrock.com /search-by-email", count: hx.findings.length, scannedAt: nowIso });
-          }
-          infostealerHosts = [...infostealerHosts, ...hx.hosts];
+        if (cb.hosts.length) {
+          provenanceExtra.push({ name: "Hudson Rock Cavalier (COMB 계정 교차)", kind: "breach", endpoint: "cavalier.hudsonrock.com /search-by-email", count: cb.hosts.length, scannedAt: nowIso });
+          infostealerHosts = [...infostealerHosts, ...cb.hosts];
         }
       }
     }

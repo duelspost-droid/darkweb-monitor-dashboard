@@ -208,7 +208,7 @@ async function collectCavalierAccounts(accounts: string[], nowIso: string): Prom
     const email = acct.trim().toLowerCase();
     const [alias, domain] = email.split("@");
     if (!alias || !domain) continue;
-    const r = await fetchJson(`${CAVALIER_BASE}/search-by-email?email=${encodeURIComponent(email)}`);
+    const r = await fetchJson(`${CAVALIER_BASE}/search-by-email?email=${encodeURIComponent(email)}`, {}, { retries: 3, baseDelay: 1500 }); // #6 레이트리밋(429) 백오프 강화
     const stealers = Array.isArray(r.data?.stealers) ? r.data.stealers : [];
     if (stealers.length) {
       const accountMasked = `${maskLocal(alias)}@${domain}`;
@@ -409,7 +409,7 @@ function plausibleEmail(email: string): boolean {
   return true;
 }
 
-async function collectProxynovaComb(domains: string[], nowIso: string): Promise<{ findings: RawFinding[]; used: boolean; count: number; emails: string[] }> {
+async function collectProxynovaComb(domains: string[], nowIso: string): Promise<{ findings: RawFinding[]; used: boolean; count: number; emails: string[]; hosts: InfostealerHostRow[] }> {
   const findings: RawFinding[] = [];
   const emails = new Set<string>(); // 노출 계정 — LeakCheck 유출이력 보강용
   for (const domain of domains) {
@@ -443,47 +443,42 @@ async function collectProxynovaComb(domains: string[], nowIso: string): Promise<
     }
     await sleep(500);
   }
-  // 유출이력 보강 — 각 노출 계정이 "언제·어디서(어느 유출사고)" 떴는지. 평문 미수집(소스명·날짜·필드분류만).
-  // LeakCheck + XposedOrNot 두 카탈로그를 함께 조회해 커버리지 극대화. (이메일 원문 외부 조회는 운영자 승인)
-  const xonCatalog = await loadXonCatalog();
-  for (const email of emails) {
-    const at = email.indexOf("@");
-    const alias = email.slice(0, at), dm = email.slice(at + 1);
-    // (a) LeakCheck 공개
-    const lc = await fetchJson(`${LEAKCHECK_BASE}/api/public?check=${encodeURIComponent(email)}`, {}, { retries: 1, baseDelay: 800 });
-    // deno-lint-ignore no-explicit-any
-    const sources: any[] = Array.isArray(lc.data?.sources) ? lc.data.sources : [];
-    const fields: string[] = Array.isArray(lc.data?.fields) ? lc.data.fields : [];
-    for (const s of sources) {
-      const name = String(s?.name ?? "").trim() || "미상 유출 출처";
-      findings.push(await mkRawFinding({
-        domain: dm, alias,
-        breachName: name,
-        breachTitle: `${name} 유출 이력`,
-        breachDate: normBreachDate(s?.date) ?? undefined,
-        dataClassesKo: mapLeakFields(fields),
-        severity: fields.includes("password") ? "high" : "medium",
-        source: "유출이력 (LeakCheck)",
-      }, nowIso, `lc|${name}`));
+  // 보강을 병렬로(#4): 유출이력(LeakCheck+XON) ∥ 인포스틸러 교차(Hudson Rock) — 서로 다른 서비스라
+  // 동시에 돌려 지연을 절반 가까이 단축(각 서비스는 자기 레이트 안에서 페이싱). 평문 미수집(소스명·날짜·분류만).
+  const emailArr = [...emails];
+  const enrichBreachHistory = async (): Promise<RawFinding[]> => {
+    const out: RawFinding[] = [];
+    const xonCatalog = await loadXonCatalog();
+    for (const email of emailArr) {
+      const at = email.indexOf("@");
+      const alias = email.slice(0, at), dm = email.slice(at + 1);
+      // LeakCheck + XposedOrNot 동시(서로 다른 서비스)
+      const [lc, xnames] = await Promise.all([
+        fetchJson(`${LEAKCHECK_BASE}/api/public?check=${encodeURIComponent(email)}`, {}, { retries: 1, baseDelay: 800 }),
+        xonCheckEmail(email),
+      ]);
+      // deno-lint-ignore no-explicit-any
+      const sources: any[] = Array.isArray(lc.data?.sources) ? lc.data.sources : [];
+      const fields: string[] = Array.isArray(lc.data?.fields) ? lc.data.fields : [];
+      for (const s of sources) {
+        const name = String(s?.name ?? "").trim() || "미상 유출 출처";
+        out.push(await mkRawFinding({ domain: dm, alias, breachName: name, breachTitle: `${name} 유출 이력`, breachDate: normBreachDate(s?.date) ?? undefined, dataClassesKo: mapLeakFields(fields), severity: fields.includes("password") ? "high" : "medium", source: "유출이력 (LeakCheck)" }, nowIso, `lc|${name}`));
+      }
+      for (const name of xnames) {
+        const meta = xonCatalog[name];
+        const dc = meta?.dataClasses ?? [];
+        out.push(await mkRawFinding({ domain: dm, alias, breachName: name, breachTitle: meta?.title ? `${meta.title} 유출 이력` : `${name} 유출 이력`, breachDate: normBreachDate(meta?.date) ?? undefined, dataClassesKo: dc.length ? koClasses(dc) : ["유출 기록"], severity: dc.length ? severityFor(dc) : "medium", source: "유출이력 (XposedOrNot)" }, nowIso, `xon|${name}`));
+      }
+      await sleep(300); // LeakCheck 레이트(~100/min) 내 페이싱
     }
-    // (b) XposedOrNot — 다른 카탈로그라 LeakCheck 미커버 계정의 사건·날짜를 추가 확보
-    const xnames = await xonCheckEmail(email);
-    for (const name of xnames) {
-      const meta = xonCatalog[name];
-      const dc = meta?.dataClasses ?? [];
-      findings.push(await mkRawFinding({
-        domain: dm, alias,
-        breachName: name,
-        breachTitle: meta?.title ? `${meta.title} 유출 이력` : `${name} 유출 이력`,
-        breachDate: normBreachDate(meta?.date) ?? undefined,
-        dataClassesKo: dc.length ? koClasses(dc) : ["유출 기록"],
-        severity: dc.length ? severityFor(dc) : "medium",
-        source: "유출이력 (XposedOrNot)",
-      }, nowIso, `xon|${name}`));
-    }
-    await sleep(350);
-  }
-  return { findings, used: true, count: findings.length, emails: [...emails] };
+    return out;
+  };
+  const [enrichFindings, cav] = await Promise.all([
+    enrichBreachHistory(),
+    HUDSONROCK_OSINT ? collectCavalierAccounts(emailArr, nowIso) : Promise.resolve({ findings: [] as RawFinding[], hosts: [] as InfostealerHostRow[] }),
+  ]);
+  findings.push(...enrichFindings, ...cav.findings);
+  return { findings, used: true, count: findings.length, emails: emailArr, hosts: cav.hosts };
 }
 
 interface Finding {
@@ -660,18 +655,13 @@ Deno.serve(async (req) => {
     if (MONITORED_DOMAINS.length) {
       const cb = await collectProxynovaComb(MONITORED_DOMAINS, nowIso);
       if (cb.used) {
+        // cb.findings 에는 COMB + 유출이력(LeakCheck/XON) + 인포스틸러 교차가 병렬수집되어 합쳐져 있음.
         findings.push(...cb.findings);
         provenanceExtra.push({ name: "콤보리스트 (ProxyNova COMB)", kind: "breach", endpoint: "api.proxynova.com /comb", count: cb.count, scannedAt: nowIso });
-        // 인포스틸러 교차매핑: COMB 발견 계정을 Hudson Rock search-by-email 로도 조회 →
-        // 같은 계정에 유출∩인포스틸러가 함께 모인다(둘 다인 계정 = 최우선 위험).
-        if (HUDSONROCK_OSINT && cb.emails.length) {
-          const hx = await collectCavalierAccounts(cb.emails, nowIso);
-          if (hx.findings.length) {
-            findings.push(...hx.findings);
-            provenanceExtra.push({ name: "Hudson Rock Cavalier (COMB 계정 교차)", kind: "breach", endpoint: "cavalier.hudsonrock.com /search-by-email", count: hx.findings.length, scannedAt: nowIso });
-          }
-          infostealerHosts = [...infostealerHosts, ...hx.hosts];
+        if (cb.hosts.length) {
+          provenanceExtra.push({ name: "Hudson Rock Cavalier (COMB 계정 교차)", kind: "breach", endpoint: "cavalier.hudsonrock.com /search-by-email", count: cb.hosts.length, scannedAt: nowIso });
         }
+        infostealerHosts = [...infostealerHosts, ...cb.hosts]; // 유출∩인포스틸러 교차 호스트
       }
     }
     } catch (e) {
