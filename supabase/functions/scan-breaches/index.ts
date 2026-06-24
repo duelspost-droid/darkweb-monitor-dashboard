@@ -257,7 +257,7 @@ async function collectCavalierAccounts(accounts: string[], nowIso: string): Prom
         source: "Hudson Rock Cavalier (계정별)",
       }, nowIso));
     }
-    await sleep(1000); // 무료 OSINT 공정사용 ~1 req/s
+    await sleep(700); // 무료 OSINT 공정사용 ~1.4 req/s (교차매핑으로 호출 늘어 약간 완화)
   }
   return { findings, hosts };
 }
@@ -396,7 +396,7 @@ function normBreachDate(d: unknown): string | null {
   return null;
 }
 
-async function collectProxynovaComb(domains: string[], nowIso: string): Promise<{ findings: RawFinding[]; used: boolean; count: number }> {
+async function collectProxynovaComb(domains: string[], nowIso: string): Promise<{ findings: RawFinding[]; used: boolean; count: number; emails: string[] }> {
   const findings: RawFinding[] = [];
   const emails = new Set<string>(); // 노출 계정 — LeakCheck 유출이력 보강용
   for (const domain of domains) {
@@ -469,7 +469,7 @@ async function collectProxynovaComb(domains: string[], nowIso: string): Promise<
     }
     await sleep(350);
   }
-  return { findings, used: true, count: findings.length };
+  return { findings, used: true, count: findings.length, emails: [...emails] };
 }
 
 interface Finding {
@@ -645,7 +645,20 @@ Deno.serve(async (req) => {
     // ProxyNova COMB 콤보리스트 (무료 키리스) — 도메인 단위 노출 계정 열거
     if (MONITORED_DOMAINS.length) {
       const cb = await collectProxynovaComb(MONITORED_DOMAINS, nowIso);
-      if (cb.used) { findings.push(...cb.findings); provenanceExtra.push({ name: "콤보리스트 (ProxyNova COMB)", kind: "breach", endpoint: "api.proxynova.com /comb", count: cb.count, scannedAt: nowIso }); }
+      if (cb.used) {
+        findings.push(...cb.findings);
+        provenanceExtra.push({ name: "콤보리스트 (ProxyNova COMB)", kind: "breach", endpoint: "api.proxynova.com /comb", count: cb.count, scannedAt: nowIso });
+        // 인포스틸러 교차매핑: COMB 발견 계정을 Hudson Rock search-by-email 로도 조회 →
+        // 같은 계정에 유출∩인포스틸러가 함께 모인다(둘 다인 계정 = 최우선 위험).
+        if (HUDSONROCK_OSINT && cb.emails.length) {
+          const hx = await collectCavalierAccounts(cb.emails, nowIso);
+          if (hx.findings.length) {
+            findings.push(...hx.findings);
+            provenanceExtra.push({ name: "Hudson Rock Cavalier (COMB 계정 교차)", kind: "breach", endpoint: "cavalier.hudsonrock.com /search-by-email", count: hx.findings.length, scannedAt: nowIso });
+          }
+          infostealerHosts = [...infostealerHosts, ...hx.hosts];
+        }
+      }
     }
     } catch (e) {
       note = (note ? note + " | " : "") + `보조 소스 일부 실패: ${(e as Error).message}`;
@@ -699,8 +712,10 @@ Deno.serve(async (req) => {
   }
 
   // 감염 호스트 상세 적재 (006) — 정상 스캔 + 계정 수집했을 때만(없으면 stale 정리로 비움)
-  if (status === "ok" && HUDSONROCK_OSINT && MONITORED_EMAILS.length) {
-    const hostRows = infostealerHosts.map((h) => ({ ...h, last_scan_tag: scanTag }));
+  if (status === "ok" && HUDSONROCK_OSINT && (MONITORED_EMAILS.length || MONITORED_DOMAINS.length)) {
+    // host_id 중복 제거(명부 + COMB 계정에서 같은 호스트가 나올 수 있음) 후 적재.
+    const dedupHosts = [...new Map(infostealerHosts.map((h) => [h.host_id, h])).values()];
+    const hostRows = dedupHosts.map((h) => ({ ...h, last_scan_tag: scanTag }));
     await sbUpsertInfostealerHosts(hostRows);
     await sbDeleteStaleHosts(scanTag);
   }

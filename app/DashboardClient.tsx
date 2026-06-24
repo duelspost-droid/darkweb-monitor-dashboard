@@ -75,17 +75,20 @@ function AccountGroupedFindings({ findings }: { findings: GroupingFinding[] }) {
     return <p className="px-5 py-10 text-center text-muted">노출된 계정이 없습니다. 👍</p>;
   }
   type Exp = { id: string; title: string; date: string; dataClasses: string[]; source: string; referenceUrl?: string };
-  type Grp = { accountMasked: string; domain: string; isNew: boolean; severity: keyof typeof SEVERITY_META; sevRank: number; exposures: Exp[] };
+  type Grp = { accountMasked: string; domain: string; isNew: boolean; hasStealer: boolean; severity: keyof typeof SEVERITY_META; sevRank: number; exposures: Exp[] };
   const map = new Map<string, Grp>();
   for (const f of findings) {
     let g = map.get(f.accountMasked);
-    if (!g) { g = { accountMasked: f.accountMasked, domain: f.domain, isNew: false, severity: f.severity, sevRank: -1, exposures: [] }; map.set(f.accountMasked, g); }
+    if (!g) { g = { accountMasked: f.accountMasked, domain: f.domain, isNew: false, hasStealer: false, severity: f.severity, sevRank: -1, exposures: [] }; map.set(f.accountMasked, g); }
     if (f.isNew) g.isNew = true;
+    // 유출∩인포스틸러 교차: 이 계정에 인포스틸러 감염 노출이 같이 있으면 최우선.
+    if (/Hudson Rock/i.test(f.source) || (f.dataClasses ?? []).includes("인포스틸러 감염")) g.hasStealer = true;
     const rank = SEVERITY_RANK[f.severity] ?? 0;
     if (rank > g.sevRank) { g.sevRank = rank; g.severity = f.severity; }
     g.exposures.push({ id: f.id, title: f.breachTitle, date: f.breachDate, dataClasses: f.dataClasses, source: f.source, referenceUrl: f.referenceUrl });
   }
   const groups = [...map.values()].sort((a, b) => {
+    if (a.hasStealer !== b.hasStealer) return a.hasStealer ? -1 : 1; // 유출+인포스틸러 동시 최상단
     if (a.isNew !== b.isNew) return a.isNew ? -1 : 1;
     if (b.sevRank !== a.sevRank) return b.sevRank - a.sevRank;
     return b.exposures.length - a.exposures.length;
@@ -97,9 +100,10 @@ function AccountGroupedFindings({ findings }: { findings: GroupingFinding[] }) {
       {groups.map((g) => {
         const sev = SEVERITY_META[g.severity];
         return (
-          <div key={g.accountMasked} className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 bg-slate-50 px-4 py-2.5">
+          <div key={g.accountMasked} className={`overflow-hidden rounded-xl border bg-white ${g.hasStealer ? "border-rose-300 ring-1 ring-rose-200" : "border-slate-200"}`}>
+            <div className={`flex flex-wrap items-center justify-between gap-2 border-b px-4 py-2.5 ${g.hasStealer ? "border-rose-100 bg-rose-50" : "border-slate-100 bg-slate-50"}`}>
               <span className="inline-flex flex-wrap items-center gap-1.5 break-all font-mono text-sm font-semibold text-ink">
+                {g.hasStealer && <span className="rounded-full bg-rose-600 px-1.5 py-0.5 text-[10px] font-bold text-white" title="유출 데이터와 인포스틸러 감염 로그에 모두 존재 — 최우선 대응">🔴 유출+인포스틸러</span>}
                 {g.isNew && <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">NEW</span>}
                 <AcctLabel accountMasked={g.accountMasked} domain={g.domain} />
               </span>

@@ -646,7 +646,7 @@ async function collectProxynovaComb(domains, nowIso) {
     }
     await sleep(350);
   }
-  return { findings, used: true, count: findings.length };
+  return { findings, used: true, count: findings.length, emails: [...emails] };
 }
 
 function summarize(findings, domains) {
@@ -886,6 +886,16 @@ async function main() {
       if (cb.used) {
         findings.push(...cb.findings);
         provenanceExtra.push({ name: "콤보리스트 (ProxyNova COMB)", kind: "breach", endpoint: "api.proxynova.com /comb", count: cb.count, scannedAt: nowIso });
+        // 인포스틸러 교차매핑: COMB 발견 계정도 Hudson Rock search-by-email 으로 조회
+        if (HUDSONROCK_OSINT && cb.emails.length) {
+          console.log(`[monitor] Hudson Rock COMB 계정 교차 ${cb.emails.length}건`);
+          const hx = await collectCavalierAccounts(cb.emails, nowIso);
+          if (hx.findings.length) {
+            findings.push(...hx.findings);
+            provenanceExtra.push({ name: "Hudson Rock Cavalier (COMB 계정 교차)", kind: "breach", endpoint: "cavalier.hudsonrock.com /search-by-email", count: hx.findings.length, scannedAt: nowIso });
+          }
+          infostealerHosts = [...infostealerHosts, ...hx.hosts];
+        }
       }
     }
   }
