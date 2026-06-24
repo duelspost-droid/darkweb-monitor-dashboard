@@ -574,6 +574,18 @@ function normBreachDate(d) {
   return null;
 }
 
+// 정합성 검증: 콤보리스트 잡음(URL 조각·형식오류) 차단. @도메인만으론 부족 → 로컬파트 형식 검증.
+function plausibleEmail(email) {
+  const at = email.indexOf("@");
+  if (at <= 0 || email.indexOf("@", at + 1) !== -1) return false;
+  const local = email.slice(0, at);
+  if (local.length > 64) return false;
+  if (!/^[a-z0-9._%+\-]+$/.test(local)) return false;
+  if (/^\.|\.$|\.\./.test(local)) return false;
+  if (/^www\d*\./.test(local) || /https?|:\/\//.test(local)) return false; // www.1004 등 URL 아티팩트
+  return true;
+}
+
 async function collectProxynovaComb(domains, nowIso) {
   const findings = [];
   const emails = new Set(); // 노출 계정 — LeakCheck 유출이력 보강용
@@ -588,6 +600,7 @@ async function collectProxynovaComb(domains, nowIso) {
         const i = line.indexOf(":"); // 우측(평문 비번) 폐기
         const email = (i === -1 ? line : line.slice(0, i)).trim().toLowerCase();
         if (!email.endsWith(suffix)) continue; // 정확매칭 가드
+        if (!plausibleEmail(email)) continue;  // 정합성 가드(URL 조각·형식오류 제거)
         const alias = email.slice(0, email.length - suffix.length);
         if (!alias || seen.has(email)) continue;
         seen.add(email);

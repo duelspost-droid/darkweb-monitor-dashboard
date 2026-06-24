@@ -396,6 +396,19 @@ function normBreachDate(d: unknown): string | null {
   return null;
 }
 
+// 정합성 검증: 콤보리스트는 잡음(URL 조각·형식오류 "이메일")이 섞여 @도메인 접미사만으로는 부족.
+// 로컬파트 형식을 검증해 www.xxx / URL / 비정상 형식을 걸러낸다(예: www.1004@domain 차단).
+function plausibleEmail(email: string): boolean {
+  const at = email.indexOf("@");
+  if (at <= 0 || email.indexOf("@", at + 1) !== -1) return false; // '@' 정확히 1개, 로컬 비어있지 않음
+  const local = email.slice(0, at);
+  if (local.length > 64) return false;                         // RFC 로컬파트 상한
+  if (!/^[a-z0-9._%+\-]+$/.test(local)) return false;          // 허용 문자만(이미 소문자)
+  if (/^\.|\.$|\.\./.test(local)) return false;                // 선두/말미/연속 점 금지(RFC)
+  if (/^www\d*\./.test(local) || /https?|:\/\//.test(local)) return false; // URL/파싱 아티팩트
+  return true;
+}
+
 async function collectProxynovaComb(domains: string[], nowIso: string): Promise<{ findings: RawFinding[]; used: boolean; count: number; emails: string[] }> {
   const findings: RawFinding[] = [];
   const emails = new Set<string>(); // 노출 계정 — LeakCheck 유출이력 보강용
@@ -410,6 +423,7 @@ async function collectProxynovaComb(domains: string[], nowIso: string): Promise<
         const i = line.indexOf(":"); // 비번에 ':' 가능 → 첫 ':' 기준 분리. 우측(평문 비번)은 폐기.
         const email = (i === -1 ? line : line.slice(0, i)).trim().toLowerCase();
         if (!email.endsWith(suffix)) continue; // 정확매칭 가드(퍼지매치 잡음 차단)
+        if (!plausibleEmail(email)) continue;  // 정합성 가드(URL 조각·형식오류 제거)
         const alias = email.slice(0, email.length - suffix.length);
         if (!alias || seen.has(email)) continue;
         seen.add(email);
