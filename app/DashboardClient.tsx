@@ -64,6 +64,74 @@ function AcctLabel({ accountMasked, domain }: { accountMasked: string; domain: s
   return <>{accountMasked}</>;
 }
 
+// 계정별로 유출(COMB·유출이력·GitHub 등)을 묶어 "이 계정 → 어디서·언제" 형태로 보여준다.
+type GroupingFinding = {
+  id: string; accountMasked: string; domain: string;
+  breachTitle: string; breachDate: string; dataClasses: string[];
+  severity: keyof typeof SEVERITY_META; isNew: boolean; source: string; referenceUrl?: string;
+};
+function AccountGroupedFindings({ findings }: { findings: GroupingFinding[] }) {
+  if (!findings.length) {
+    return <p className="px-5 py-10 text-center text-muted">노출된 계정이 없습니다. 👍</p>;
+  }
+  type Exp = { id: string; title: string; date: string; dataClasses: string[]; source: string; referenceUrl?: string };
+  type Grp = { accountMasked: string; domain: string; isNew: boolean; severity: keyof typeof SEVERITY_META; sevRank: number; exposures: Exp[] };
+  const map = new Map<string, Grp>();
+  for (const f of findings) {
+    let g = map.get(f.accountMasked);
+    if (!g) { g = { accountMasked: f.accountMasked, domain: f.domain, isNew: false, severity: f.severity, sevRank: -1, exposures: [] }; map.set(f.accountMasked, g); }
+    if (f.isNew) g.isNew = true;
+    const rank = SEVERITY_RANK[f.severity] ?? 0;
+    if (rank > g.sevRank) { g.sevRank = rank; g.severity = f.severity; }
+    g.exposures.push({ id: f.id, title: f.breachTitle, date: f.breachDate, dataClasses: f.dataClasses, source: f.source, referenceUrl: f.referenceUrl });
+  }
+  const groups = [...map.values()].sort((a, b) => {
+    if (a.isNew !== b.isNew) return a.isNew ? -1 : 1;
+    if (b.sevRank !== a.sevRank) return b.sevRank - a.sevRank;
+    return b.exposures.length - a.exposures.length;
+  });
+  for (const g of groups) g.exposures.sort((x, y) => (y.date || "").localeCompare(x.date || ""));
+
+  return (
+    <div className="space-y-3 p-4">
+      {groups.map((g) => {
+        const sev = SEVERITY_META[g.severity];
+        return (
+          <div key={g.accountMasked} className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 bg-slate-50 px-4 py-2.5">
+              <span className="inline-flex flex-wrap items-center gap-1.5 break-all font-mono text-sm font-semibold text-ink">
+                {g.isNew && <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">NEW</span>}
+                <AcctLabel accountMasked={g.accountMasked} domain={g.domain} />
+              </span>
+              <span className="inline-flex shrink-0 items-center gap-2">
+                <span className="text-[11px] text-muted">유출 {g.exposures.length}건</span>
+                <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-semibold ${sev.chip}`}>{sev.label}</span>
+              </span>
+            </div>
+            <ul>
+              {g.exposures.map((e) => (
+                <li key={e.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-slate-50 px-4 py-2 text-sm first:border-t-0">
+                  <span className="min-w-0 break-words font-medium text-slate-700">{e.title}</span>
+                  <span className="shrink-0 font-mono text-xs text-muted">{e.date || "—"}</span>
+                  <span className="flex flex-wrap gap-1">
+                    {e.dataClasses.slice(0, 4).map((dc) => (
+                      <span key={dc} className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[11px] text-slate-600">{dc}</span>
+                    ))}
+                  </span>
+                  <span className="ml-auto shrink-0 text-[11px] text-muted">
+                    {e.source}
+                    {e.referenceUrl && <a href={e.referenceUrl} target="_blank" rel="noreferrer" className="ml-1.5 font-semibold text-sky-600 hover:underline">↗</a>}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function fmtDate(iso: string) {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -506,86 +574,8 @@ export default function DashboardClient() {
         </Panel>
       </section>
 
-      <Panel title="유출 계정 상세 (식별)" subtitle="관리자 인증 뒤 회사 계정을 식별 표시합니다." right={<span className="chip chip-neutral">총 {summary.total}건</span>} bodyClassName="p-0">
-        {/* 데스크톱: 테이블 */}
-        <div className="hidden overflow-x-auto sm:block">
-          <table className="w-full min-w-[640px] text-sm">
-            <thead>
-              <tr className="border-b border-slate-200 text-left text-xs font-semibold uppercase tracking-wide text-muted">
-                <th className="px-5 py-3">계정</th>
-                <th className="px-5 py-3">유출 사건</th>
-                <th className="px-5 py-3">유출 일자</th>
-                <th className="px-5 py-3">노출 항목</th>
-                <th className="px-5 py-3">심각도</th>
-                <th className="px-5 py-3">출처</th>
-              </tr>
-            </thead>
-            <tbody>
-              {scan.findings.length === 0 ? (
-                <tr><td colSpan={6} className="px-5 py-10 text-center text-muted">노출된 계정이 없습니다. 👍</td></tr>
-              ) : (
-                scan.findings.map((f) => {
-                  const sev = SEVERITY_META[f.severity];
-                  return (
-                    <tr key={f.id} className="border-b border-slate-100 last:border-0 hover:bg-slate-50">
-                      <td className="px-5 py-3 font-mono font-semibold text-ink">
-                        <span className="inline-flex flex-wrap items-center gap-1.5">
-                          {f.isNew && <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">NEW</span>}
-                          <AcctLabel accountMasked={f.accountMasked} domain={f.domain} />
-                        </span>
-                      </td>
-                      <td className="px-5 py-3 text-slate-700">{f.breachTitle}</td>
-                      <td className="px-5 py-3 font-mono text-xs text-muted">{f.breachDate || "—"}</td>
-                      <td className="px-5 py-3">
-                        <div className="flex flex-wrap gap-1">
-                          {f.dataClasses.slice(0, 4).map((dc) => (
-                            <span key={dc} className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[11px] text-slate-600">{dc}</span>
-                          ))}
-                          {f.dataClasses.length > 4 && <span className="text-[11px] text-muted">+{f.dataClasses.length - 4}</span>}
-                        </div>
-                      </td>
-                      <td className="px-5 py-3"><span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-semibold ${sev.chip}`}>{sev.label}</span></td>
-                      <td className="px-5 py-3 text-[11px] text-muted">
-                        {f.source}
-                        {f.referenceUrl && <a href={f.referenceUrl} target="_blank" rel="noreferrer" className="ml-1.5 font-semibold text-sky-600 hover:underline">↗ 열기</a>}
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-        {/* 모바일: 카드 */}
-        <div className="space-y-2 p-4 sm:hidden">
-          {scan.findings.length === 0 ? (
-            <p className="py-6 text-center text-sm text-muted">노출된 계정이 없습니다. 👍</p>
-          ) : (
-            scan.findings.map((f) => {
-              const sev = SEVERITY_META[f.severity];
-              return (
-                <div key={f.id} className="rounded-lg border border-slate-100 bg-slate-50 p-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <span className="inline-flex flex-wrap items-center gap-1.5 break-all font-mono text-sm font-semibold text-ink">
-                      {f.isNew && <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">NEW</span>}
-                      <AcctLabel accountMasked={f.accountMasked} domain={f.domain} />
-                    </span>
-                    <span className={`inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-xs font-semibold ${sev.chip}`}>{sev.label}</span>
-                  </div>
-                  <div className="mt-1.5 break-words text-sm text-slate-700">{f.breachTitle} <span className="text-xs text-muted">· {f.breachDate || "—"}</span></div>
-                  {f.dataClasses.length > 0 && (
-                    <div className="mt-1.5 flex flex-wrap gap-1">
-                      {f.dataClasses.map((dc) => (
-                        <span key={dc} className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] text-slate-600">{dc}</span>
-                      ))}
-                    </div>
-                  )}
-                  <div className="mt-1.5 text-[11px] text-muted">출처: {f.source}{f.referenceUrl && <a href={f.referenceUrl} target="_blank" rel="noreferrer" className="ml-1.5 font-semibold text-sky-600 hover:underline">↗ 열기</a>}</div>
-                </div>
-              );
-            })
-          )}
-        </div>
+      <Panel title="유출 계정 상세 (식별)" subtitle="계정별로 묶어 — 어느 유출사고에 언제 노출됐는지 식별 표시합니다." right={<span className="chip chip-neutral">총 {summary.total}건</span>} bodyClassName="p-0">
+        <AccountGroupedFindings findings={scan.findings} />
       </Panel>
 
       <Panel title="인포스틸러 점검이란?" subtitle="다크웹 정보탈취 악성코드(인포스틸러) 감염 점검의 개념과 방법">
