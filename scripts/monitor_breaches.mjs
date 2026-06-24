@@ -594,8 +594,9 @@ async function collectProxynovaComb(domains, nowIso) {
         emails.add(email);
         findings.push(makeRawFinding({
           domain, alias,
-          breachName: "콤보리스트 노출 (COMB)",
-          breachTitle: "다크웹 유통 콤보리스트(email:password) 노출",
+          breachName: "COMB 통합본 (다크웹 유통)",
+          breachTitle: "COMB — 2021년 약 32억건 email:password 유출 통합본(다크웹·해킹포럼 유통)",
+          breachDate: "2021-02-01", // COMB 통합본 등장 시점. 개별 계정 유출시점이 아님.
           dataClassesKo: ["이메일", "비밀번호"],
           severity: "high",
           source: "콤보리스트 (ProxyNova COMB)",
@@ -606,13 +607,16 @@ async function collectProxynovaComb(domains, nowIso) {
     }
     await sleep(500);
   }
-  // 유출이력 보강(LeakCheck 공개) — 각 노출 계정이 "언제·어디서" 떴는지. 평문 비번 미수집(소스명·날짜·필드만).
+  // 유출이력 보강 — 각 노출 계정이 "언제·어디서" 떴는지. 평문 미수집(소스명·날짜·필드만).
+  // LeakCheck + XposedOrNot 두 카탈로그로 커버리지 극대화. (이메일 원문 외부 조회는 운영자 승인)
+  const xonCatalog = await loadXonCatalog();
   for (const email of emails) {
+    const at = email.indexOf("@");
+    const alias = email.slice(0, at), dm = email.slice(at + 1);
+    // (a) LeakCheck 공개
     const lc = await fetchJson(`${LEAKCHECK_BASE}/api/public?check=${encodeURIComponent(email)}`, {}, { retries: 1, baseDelay: 800 });
     const sources = Array.isArray(lc.data?.sources) ? lc.data.sources : [];
     const fields = Array.isArray(lc.data?.fields) ? lc.data.fields : [];
-    const at = email.indexOf("@");
-    const alias = email.slice(0, at), dm = email.slice(at + 1);
     for (const s of sources) {
       const name = String(s?.name ?? "").trim() || "미상 유출 출처";
       findings.push(makeRawFinding({
@@ -625,7 +629,22 @@ async function collectProxynovaComb(domains, nowIso) {
         source: "유출이력 (LeakCheck)",
       }, nowIso, `lc|${name}`));
     }
-    await sleep(450);
+    // (b) XposedOrNot — 다른 카탈로그라 LeakCheck 미커버 계정의 사건·날짜를 추가 확보
+    const xnames = await xonCheckEmail(email);
+    for (const name of xnames) {
+      const meta = xonCatalog.get(name);
+      const dc = meta?.dataClasses ?? [];
+      findings.push(makeRawFinding({
+        domain: dm, alias,
+        breachName: name,
+        breachTitle: meta?.title ? `${meta.title} 유출 이력` : `${name} 유출 이력`,
+        breachDate: normBreachDate(meta?.date) ?? undefined,
+        dataClassesKo: dc.length ? koDataClasses(dc) : ["유출 기록"],
+        severity: dc.length ? severityForDataClasses(dc) : "medium",
+        source: "유출이력 (XposedOrNot)",
+      }, nowIso, `xon|${name}`));
+    }
+    await sleep(350);
   }
   return { findings, used: true, count: findings.length };
 }

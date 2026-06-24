@@ -416,8 +416,9 @@ async function collectProxynovaComb(domains: string[], nowIso: string): Promise<
         emails.add(email);
         findings.push(await mkRawFinding({
           domain, alias,
-          breachName: "콤보리스트 노출 (COMB)",
-          breachTitle: "다크웹 유통 콤보리스트(email:password) 노출",
+          breachName: "COMB 통합본 (다크웹 유통)",
+          breachTitle: "COMB — 2021년 약 32억건 email:password 유출 통합본(다크웹·해킹포럼 유통)",
+          breachDate: "2021-02-01", // COMB 통합본이 등장한 시점(2021-02). 개별 계정 유출시점이 아니라 통합본 공개 시점.
           dataClassesKo: ["이메일", "비밀번호"],
           severity: "high",
           source: "콤보리스트 (ProxyNova COMB)",
@@ -428,15 +429,17 @@ async function collectProxynovaComb(domains: string[], nowIso: string): Promise<
     }
     await sleep(500);
   }
-  // 유출이력 보강(LeakCheck 공개) — 각 노출 계정이 "언제·어디서(어느 유출사고)" 떴는지.
-  // 평문 비번은 받지도 저장도 안 함 — 소스명·날짜·필드분류(이메일/비밀번호 등)만. (이메일 원문 외부 조회는 운영자 승인)
+  // 유출이력 보강 — 각 노출 계정이 "언제·어디서(어느 유출사고)" 떴는지. 평문 미수집(소스명·날짜·필드분류만).
+  // LeakCheck + XposedOrNot 두 카탈로그를 함께 조회해 커버리지 극대화. (이메일 원문 외부 조회는 운영자 승인)
+  const xonCatalog = await loadXonCatalog();
   for (const email of emails) {
+    const at = email.indexOf("@");
+    const alias = email.slice(0, at), dm = email.slice(at + 1);
+    // (a) LeakCheck 공개
     const lc = await fetchJson(`${LEAKCHECK_BASE}/api/public?check=${encodeURIComponent(email)}`, {}, { retries: 1, baseDelay: 800 });
     // deno-lint-ignore no-explicit-any
     const sources: any[] = Array.isArray(lc.data?.sources) ? lc.data.sources : [];
     const fields: string[] = Array.isArray(lc.data?.fields) ? lc.data.fields : [];
-    const at = email.indexOf("@");
-    const alias = email.slice(0, at), dm = email.slice(at + 1);
     for (const s of sources) {
       const name = String(s?.name ?? "").trim() || "미상 유출 출처";
       findings.push(await mkRawFinding({
@@ -449,7 +452,22 @@ async function collectProxynovaComb(domains: string[], nowIso: string): Promise<
         source: "유출이력 (LeakCheck)",
       }, nowIso, `lc|${name}`));
     }
-    await sleep(450);
+    // (b) XposedOrNot — 다른 카탈로그라 LeakCheck 미커버 계정의 사건·날짜를 추가 확보
+    const xnames = await xonCheckEmail(email);
+    for (const name of xnames) {
+      const meta = xonCatalog[name];
+      const dc = meta?.dataClasses ?? [];
+      findings.push(await mkRawFinding({
+        domain: dm, alias,
+        breachName: name,
+        breachTitle: meta?.title ? `${meta.title} 유출 이력` : `${name} 유출 이력`,
+        breachDate: normBreachDate(meta?.date) ?? undefined,
+        dataClassesKo: dc.length ? koClasses(dc) : ["유출 기록"],
+        severity: dc.length ? severityFor(dc) : "medium",
+        source: "유출이력 (XposedOrNot)",
+      }, nowIso, `xon|${name}`));
+    }
+    await sleep(350);
   }
   return { findings, used: true, count: findings.length };
 }
