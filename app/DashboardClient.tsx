@@ -69,17 +69,80 @@ type GroupingFinding = {
   id: string; accountMasked: string; domain: string;
   breachTitle: string; breachDate: string; dataClasses: string[];
   severity: keyof typeof SEVERITY_META; isNew: boolean; source: string; referenceUrl?: string;
+  status?: string; remediationNote?: string; remediatedBy?: string; remediatedAt?: string;
 };
-function AccountGroupedFindings({ findings }: { findings: GroupingFinding[] }) {
+
+// 조치 상태 메타
+const STATUS_META: Record<string, { label: string; cls: string }> = {
+  open: { label: "미조치", cls: "border-slate-300 bg-slate-100 text-slate-600" },
+  remediated: { label: "조치완료", cls: "border-teal-300 bg-teal-100 text-teal-700" },
+  dismissed: { label: "이상없음", cls: "border-sky-300 bg-sky-100 text-sky-700" },
+};
+
+// 자동 조치의견 — 노출 유형·인포스틸러 여부 기반 권고.
+function suggestAction(hasStealer: boolean, dataClasses: Set<string>): string {
+  if (hasStealer)
+    return "감염 추정 PC 격리·백신 정밀검사 → 해당 계정 비밀번호 즉시 재설정 + MFA → 활성 세션 강제 로그아웃. 동일 비밀번호 재사용 서비스 점검.";
+  if (dataClasses.has("신용카드") || dataClasses.has("계좌번호"))
+    return "금융정보 노출 — 카드/계좌 모니터링·재발급 검토, 본인 통지 및 비밀번호 재설정.";
+  if (dataClasses.has("비밀번호"))
+    return "비밀번호 즉시 재설정 + MFA 적용. 동일/유사 비밀번호를 쓴 다른 서비스도 점검.";
+  return "노출 항목 확인 후 비밀번호 재설정·계정 점검 권고.";
+}
+
+// 계정(그룹) 단위 조치 컨트롤 — 상태 변경 + 메모를 set_remediation RPC 로 기록.
+function RemediationControls({
+  account, status, note, by, at, suggestion, onChanged,
+}: { account: string; status: string; note?: string; by?: string; at?: string; suggestion: string; onChanged: () => void }) {
+  const [draft, setDraft] = useState(note ?? "");
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
+  const cur = STATUS_META[status] ?? STATUS_META.open;
+  async function apply(s: string) {
+    setBusy(s); setErr("");
+    const { error } = await supabase.rpc("set_remediation", { p_account: account, p_status: s, p_note: draft || null });
+    setBusy("");
+    if (error) setErr("저장 실패: " + error.message);
+    else onChanged();
+  }
+  return (
+    <div className="border-t border-slate-100 bg-slate-50/70 px-4 py-3">
+      <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
+        <span className="font-semibold text-muted">조치 상태</span>
+        <span className={`rounded-full border px-2 py-0.5 font-semibold ${cur.cls}`}>{cur.label}</span>
+        {by && at && <span className="text-[11px] text-muted">· {by} · {fmtDate(at)}</span>}
+      </div>
+      <div className="mb-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] leading-5 text-amber-900">
+        <b>조치의견:</b> {suggestion}
+      </div>
+      <textarea
+        value={draft} onChange={(e) => setDraft(e.target.value)} rows={2}
+        placeholder="조치 내역/메모 (예: 6/25 비번 재설정·MFA 적용 / 또는 '오탐 — 이상없음' 사유)"
+        className="mb-2 w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs outline-none focus:border-rose-400"
+      />
+      <div className="flex flex-wrap items-center gap-2">
+        <button onClick={() => apply("remediated")} disabled={!!busy} className="rounded-lg bg-teal-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-teal-700 disabled:opacity-50">{busy === "remediated" ? "저장…" : "조치완료"}</button>
+        <button onClick={() => apply("dismissed")} disabled={!!busy} className="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-sky-700 disabled:opacity-50">{busy === "dismissed" ? "저장…" : "이상없음"}</button>
+        <button onClick={() => apply("open")} disabled={!!busy} className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 disabled:opacity-50">{busy === "open" ? "저장…" : "미조치로"}</button>
+        {err && <span className="self-center text-[11px] font-semibold text-rose-600">{err}</span>}
+      </div>
+    </div>
+  );
+}
+
+function AccountGroupedFindings({ findings, onChanged }: { findings: GroupingFinding[]; onChanged: () => void }) {
   if (!findings.length) {
     return <p className="px-5 py-10 text-center text-muted">노출된 계정이 없습니다. 👍</p>;
   }
   type Exp = { id: string; title: string; date: string; dataClasses: string[]; source: string; referenceUrl?: string };
-  type Grp = { accountMasked: string; domain: string; isNew: boolean; hasStealer: boolean; severity: keyof typeof SEVERITY_META; sevRank: number; exposures: Exp[] };
+  type Grp = { accountMasked: string; domain: string; isNew: boolean; hasStealer: boolean; severity: keyof typeof SEVERITY_META; sevRank: number; exposures: Exp[]; status: string; note?: string; by?: string; at?: string };
   const map = new Map<string, Grp>();
   for (const f of findings) {
     let g = map.get(f.accountMasked);
-    if (!g) { g = { accountMasked: f.accountMasked, domain: f.domain, isNew: false, hasStealer: false, severity: f.severity, sevRank: -1, exposures: [] }; map.set(f.accountMasked, g); }
+    if (!g) { g = { accountMasked: f.accountMasked, domain: f.domain, isNew: false, hasStealer: false, severity: f.severity, sevRank: -1, exposures: [], status: "open" }; map.set(f.accountMasked, g); }
+    // 조치 상태: 계정 단위로 동일하게 저장됨 — 비-open 값이 있으면 채택.
+    if (f.status && f.status !== "open") { g.status = f.status; g.note = f.remediationNote; g.by = f.remediatedBy; g.at = f.remediatedAt; }
+    else if (f.remediationNote && !g.note) { g.note = f.remediationNote; }
     if (f.isNew) g.isNew = true;
     // 유출∩인포스틸러 교차: 이 계정에 인포스틸러 감염 노출이 같이 있으면 최우선.
     if (/Hudson Rock/i.test(f.source) || (f.dataClasses ?? []).includes("인포스틸러 감염")) g.hasStealer = true;
@@ -129,6 +192,15 @@ function AccountGroupedFindings({ findings }: { findings: GroupingFinding[] }) {
                 </li>
               ))}
             </ul>
+            <RemediationControls
+              account={g.accountMasked}
+              status={g.status}
+              note={g.note}
+              by={g.by}
+              at={g.at}
+              suggestion={suggestAction(g.hasStealer, new Set(g.exposures.flatMap((e) => e.dataClasses)))}
+              onChanged={onChanged}
+            />
           </div>
         );
       })}
@@ -149,7 +221,7 @@ async function fetchScan(): Promise<BreachScan> {
     supabase
       .from("breach_findings")
       .select(
-        "finding_id,account_masked,account,domain,breach_name,breach_title,breach_date,data_classes,severity,is_new,discovered_at,source,reference_url"
+        "finding_id,account_masked,account,domain,breach_name,breach_title,breach_date,data_classes,severity,is_new,discovered_at,source,reference_url,status,remediation_note,remediated_by,remediated_at"
       ),
     supabase.from("scan_runs").select("*").order("scanned_at", { ascending: false }).limit(30),
     supabase.from("infostealer_findings").select("*").order("total", { ascending: false }),
@@ -174,6 +246,10 @@ async function fetchScan(): Promise<BreachScan> {
     discoveredAt: r.discovered_at,
     source: r.source ?? "",
     referenceUrl: r.reference_url ?? undefined,
+    status: r.status ?? "open",
+    remediationNote: r.remediation_note ?? "",
+    remediatedBy: r.remediated_by ?? "",
+    remediatedAt: r.remediated_at ?? "",
   }));
   findings.sort((a, b) => {
     if (a.isNew !== b.isNew) return a.isNew ? -1 : 1;
@@ -385,6 +461,56 @@ function SetPasswordPanel({ onDone, onCancel }: { onDone: () => void; onCancel?:
   );
 }
 
+// 조치 내역(감사 로그) — remediation_log.
+function RemediationLogPanel({ reloadKey }: { reloadKey: string }) {
+  const [rows, setRows] = useState<Array<{ id: number; account_masked: string; status: string; note: string; actor: string; created_at: string }>>([]);
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    supabase
+      .from("remediation_log")
+      .select("id,account_masked,status,note,actor,created_at")
+      .order("created_at", { ascending: false })
+      .limit(50)
+      .then(({ data, error }) => {
+        if (error) setErr(error.message);
+        else setRows((data ?? []) as typeof rows);
+      });
+  }, [reloadKey]);
+  return (
+    <Panel title="조치 내역" subtitle="상태 변경·조치 메모 이력 (감사 로그)">
+      {err ? (
+        <p className="py-4 text-center text-sm text-rose-600">로그 조회 실패: {err}</p>
+      ) : rows.length === 0 ? (
+        <p className="py-6 text-center text-sm text-muted">조치 이력이 없습니다.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[640px] text-sm">
+            <thead>
+              <tr className="border-b border-slate-200 text-left text-xs font-semibold uppercase tracking-wide text-muted">
+                <th className="px-3 py-2">시각</th><th className="px-3 py-2">계정</th><th className="px-3 py-2">상태</th><th className="px-3 py-2">메모</th><th className="px-3 py-2">담당</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => {
+                const s = STATUS_META[r.status] ?? STATUS_META.open;
+                return (
+                  <tr key={r.id} className="border-b border-slate-100 align-top last:border-0">
+                    <td className="whitespace-nowrap px-3 py-2 font-mono text-[11px] text-muted">{fmtDate(r.created_at)}</td>
+                    <td className="break-all px-3 py-2 font-mono text-xs text-ink">{r.account_masked}</td>
+                    <td className="px-3 py-2"><span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${s.cls}`}>{s.label}</span></td>
+                    <td className="px-3 py-2 text-slate-700">{r.note || "—"}</td>
+                    <td className="px-3 py-2 text-[11px] text-muted">{r.actor}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
 export default function DashboardClient() {
   const [session, setSession] = useState<Session | null>(null);
   const [ready, setReady] = useState(false);
@@ -579,8 +705,10 @@ export default function DashboardClient() {
       </section>
 
       <Panel title="유출 계정 상세 (식별)" subtitle="계정별로 묶어 — 어느 유출사고에 언제 노출됐는지 식별 표시합니다." right={<span className="chip chip-neutral">총 {summary.total}건</span>} bodyClassName="p-0">
-        <AccountGroupedFindings findings={scan.findings} />
+        <AccountGroupedFindings findings={scan.findings} onChanged={load} />
       </Panel>
+
+      <RemediationLogPanel reloadKey={scan.findings.map((f) => `${f.id}:${f.status}`).join("|")} />
 
       <Panel title="인포스틸러 점검이란?" subtitle="다크웹 정보탈취 악성코드(인포스틸러) 감염 점검의 개념과 방법">
         <div className="grid gap-4 text-sm leading-6 text-slate-700 lg:grid-cols-2">

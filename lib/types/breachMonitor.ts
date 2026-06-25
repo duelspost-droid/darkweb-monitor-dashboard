@@ -25,6 +25,11 @@ export interface BreachFinding {
   source: string;
   // 참고 링크 (예: GitHub 노출 파일 URL) — 있으면 표시
   referenceUrl?: string;
+  // 조치 상태 (open=미조치 | remediated=조치완료 | dismissed=이상없음) + 조치 기록
+  status?: string;
+  remediationNote?: string;
+  remediatedBy?: string;
+  remediatedAt?: string;
 }
 
 // 다크웹 인포스틸러(악성코드) 감염 — 도메인 전수 집계 (Hudson Rock Cavalier).
