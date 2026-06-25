@@ -10,8 +10,9 @@
 - **데이터 원칙**: 다크웹 직접 크롤링 금지 — 합법 유출 인텔리전스 API만. 평문 비밀번호 미저장.
 
 ## 2. 현재 라이브 상태 (✅ 배포 완료)
-- **대시보드(공개 URL, 관리자 인증 게이트)**: https://duelspost-droid.github.io/darkweb-monitor-dashboard/
-  - 로그인 전엔 데이터 안 보임(RLS). 로그인 후 식별 데이터 표시.
+- **대시보드(관리자 인증 게이트)**: **https://dark.jbax.co.kr/** (커스텀 도메인, `public/CNAME`; DNS `dark`→`duelspost-droid.github.io`) — github.io URL도 동작.
+  - `next.config.mjs`가 CNAME 존재 시 루트(/) 배포(basePath 없음) 자동 처리.
+  - 로그인 전엔 데이터 안 보임(RLS). 로그인 후 식별 데이터 표시(모바일 반응형).
 - **플레이그라운드 슬롯**: https://www.jbax.co.kr/ 의 "다크웹 유출 모니터링" 카드 → 위 대시보드로 링크 (repo: `duelspost-droid/jbax-www`, master).
 - **GitHub repo**: https://github.com/duelspost-droid/darkweb-monitor-dashboard (Public). Pages: Source=GitHub Actions.
 - **현재 실데이터**: 계정 유출 1건(`webmaster@jbbank.co.kr`, Epik) · 인포스틸러 819건(kjbank 464·jbbank 282·wooricap 73·jbfg 0).
@@ -37,11 +38,17 @@
   - **GitHub Actions Secrets**: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
   - **DB 비밀번호 / service_role / anon JWT / SCAN_SECRET 값**: 별도 안전 보관(여기 미기재).
 
-## 5. 데이터 소스 (전부 무료)
-- **XposedOrNot** `api.xposedornot.com/v1/check-email/{email}` — 계정별 데이터 유출(키 불필요). `/v1/breaches` 카탈로그로 메타 보강.
-- **Hudson Rock Cavalier** `cavalier.hudsonrock.com/api/json/v2/osint-tools/search-by-domain?domain=` — **도메인 전수 인포스틸러 집계**(키 불필요). 개별 이메일 점검은 `/search-by-email`(내부 도구만).
-- **HIBP**(옵션·유료): `HIBP_API_KEY` 있으면 도메인 전수 검색으로 자동 전환.
-- 다음 추가 예정: **RapidAPI(BreachDirectory)**, **IntelX** — 둘 다 무료 티어지만 가입/키 필요.
+## 5. 데이터 소스 (멀티소스 — 키 있으면 사용, 없으면 조용히 skip; 모두 `source` 라벨 + `sources[]` provenance 기록)
+> 상세 환경변수는 `.env.example` (A)~(E), 소스별 설명은 `CLAUDE.md` 참고.
+- **XposedOrNot**(무료, 키 불필요) — 계정별 유출 `/v1/check-email` + `/v1/breaches` 카탈로그.
+- **Hudson Rock Cavalier**(무료) — 도메인 전수 인포스틸러 `/search-by-domain` + 계정별 `/search-by-email`(→breach_findings, 민감값 미저장).
+- **ProxyNova COMB**(무료, 키리스) — 콤보리스트 노출 계정.
+- **GitHub 공개 노출 검색**(`GITHUB_TOKEN`, 무료) — 공개 코드/gist에서 도메인+자격증명 노출. 값 미저장, repo/파일 포인터만.
+- **HIBP**(유료 `HIBP_API_KEY`) — 도메인 전수(임직원 명부 없이 전수는 이 경로).
+- **Intelligence X**(`INTELX_API_KEY`) — 도메인 유출 레코드.
+- **LeakCheck**(`LEAKCHECK_API_KEY`=Pro v2 도메인 / 무키=public 계정별).
+- 교차: 유출 ∩ 인포스틸러 매핑, 계정별 그룹뷰 제공.
+- (설계만) **Tor 다크웹 크롤러** — `docs/DARKWEB_TOR_CRAWLER_DESIGN.md` (거버넌스/설계 v1.0, 미구현).
 
 ## 6. 모니터링 대상 도메인 (JB금융 4개 계열사)
 `jbfg.com`(JB금융지주) · `jbbank.co.kr`(전북은행) · `kjbank.com`(광주은행) · `wooricap.com`(JB우리캐피탈).
@@ -50,6 +57,7 @@
 
 ## 7. 인증 / 접근 제어
 - **관리자 로그인**: Supabase Auth `signInWithPassword` (secuday 방식). 게이트 통과해야 데이터 fetch.
+- **고정 관리자 이메일**: `NEXT_PUBLIC_ADMIN_EMAIL` 설정 시 로그인 폼이 **비밀번호만** 받음(이메일 토글로 변경 가능). `lib/supabase/browserClient.ts` 의 `adminEmail`.
 - **RLS**: breach_findings / scan_runs / infostealer_findings 의 SELECT = `authenticated`만(005 마이그레이션). anon 키로는 빈 값. service_role(Edge Function)만 쓰기.
 - **관리자 계정**: `duels@jbfg.com` (Supabase Auth). 비밀번호는 **초대/재설정 이메일 링크로 본인이 설정**(대시보드의 "비밀번호 설정/변경" 폼). ⚠️ 비번 설정 미완 가능 — 14절 참고.
 - 초대 리다이렉트: Auth → URL Configuration → Site URL = 라이브 대시보드 URL.
@@ -71,10 +79,13 @@ scripts/
   check_employee_stealers.mjs  ★내부 전용: 임직원 계정 개별 인포스틸러 점검(결과 gitignore)
 supabase/
   functions/scan-breaches/index.ts   ★Deno Edge Function(verify_jwt=false, x-scan-secret)
-  migrations/001~005.sql             스키마·scan_runs·인포스틸러·cron·RLS잠금
+  migrations/001~007.sql             스키마·scan_runs·인포스틸러·cron·RLS잠금·인포스틸러호스트·도메인화이트리스트
   config.toml
-.github/workflows/deploy.yml
+.github/workflows/deploy.yml         (CI 셋업: docs/CI_DEPLOY_SETUP.md)
+docs/DARKWEB_TOR_CRAWLER_DESIGN.md   Tor 크롤러 설계·거버넌스(미구현)
 data/security/monitor_config.json    (+ *.local.json/.local.html 은 gitignore)
+internal-tools/                      ★gitignore — 망분리 내부 IR 도구(비커밋)
+public/CNAME                         dark.jbax.co.kr
 ```
 
 ## 9. 로컬 개발 (중요한 환경 제약)
@@ -106,6 +117,14 @@ NEXT_OUTPUT=export PAGES_BASE_PATH=/darkweb-monitor-dashboard npm run build -- -
 - `aa21cbd` **Hudson Rock Cavalier 도메인 전수 인포스틸러 + 수집 출처(provenance) 기록**
 - `4ddd8c7` **관리자 인증(Supabase Auth) 비공개 대시보드 + RLS 잠금**(정적빌드 실데이터 제거)
 - `4140d83` 초대/재설정 링크 진입 시 **비밀번호 설정 폼** 표시 fix
+- **(2026-06-24 병렬 개발)** 다중 소스·UX·운영 확장:
+  - `853d081`/`e39ac74`/`75d931e` GitHub 공개 노출 검색 콜렉터(무료) + Edge 500 격리
+  - `122c307`/`fb3083e`/`ea24fb1`/`d1e3a13` **ProxyNova COMB** 수집기 + 유출이력 보강 + 정합성 검증
+  - IntelX·LeakCheck 소스 + `914d426` 유출∩인포스틸러 교차매핑 + `980a300` 계정별 그룹뷰
+  - `079117c` **커스텀 도메인 dark.jbax.co.kr**(CNAME) + `5c79108` 모바일 오버플로 fix + `2ea0ad4` 관리자 식별 표시
+  - `d2a7031` 스캔 병렬화·레이트리밋·**도메인 화이트리스트**(007) + CI 배포 문서(`docs/CI_DEPLOY_SETUP.md`)
+  - `006_infostealer_hosts.sql`(인포스틸러 호스트), `2c67cff` **Tor 크롤러 설계 문서**, `57cc3dc` `internal-tools/` gitignore(망분리 내부 IR 도구)
+- `1d8c158` 이 핸드오프 종합 갱신
 - (그 사이 CI "Update dashboard snapshot" 자동 커밋 다수)
 - 별도: `duelspost-droid/jbax-www` 에 플레이그라운드 슬롯 카드 추가(master).
 
@@ -117,12 +136,12 @@ NEXT_OUTPUT=export PAGES_BASE_PATH=/darkweb-monitor-dashboard npm run build -- -
 - "공개 유지(마스킹 실데이터)"는 사용자 결정이었으나, 인증 전환으로 현재는 로그인 필요. 민감도 커지면 비공개 호스팅 검토.
 
 ## 13. 미완 / 다음 TODO
-- [ ] **관리자 비밀번호 설정 완료**(14절) — 로그인 동작 최종 확인(로그인 후 화면은 비번 없어 미검증).
-- [ ] **RapidAPI(BreachDirectory) · IntelX 소스 추가**(무료 티어, 키 발급 필요) — 같은 패턴(수집기+출처+섹션).
-- [ ] HIBP 유료키 도입 시 도메인 전수(계정별→도메인) 자동 전환 검증.
-- [ ] 알림(신규 발견 시 Slack/메일 웹훅), 보고서 자동 이메일(Resend 등 키 필요).
+- [ ] **관리자 비밀번호 설정 완료**(14절) — 로그인 동작 최종 확인. (`NEXT_PUBLIC_ADMIN_EMAIL`도 GitHub Secret/.env.local에 설정하면 비번만 입력)
+- [ ] **소스 키 활성화**: IntelX/LeakCheck/GitHub/HIBP는 **코드 구현 완료, 키만 넣으면 자정 배치에 적용**(Edge 시크릿 `INTELX_API_KEY`·`LEAKCHECK_API_KEY`·`GITHUB_TOKEN`·`HIBP_API_KEY`). 각 소스 라이브 결과 검증.
+- [ ] **커스텀 도메인 DNS**: `dark` CNAME → `duelspost-droid.github.io` 등록 + Pages HTTPS 검증.
+- [ ] **Tor 다크웹 크롤러** 구현 — 설계/거버넌스는 `docs/DARKWEB_TOR_CRAWLER_DESIGN.md`. 법무·망분리 검토 후.
+- [ ] 알림(신규 발견 Slack/메일 웹훅), 보고서 자동 이메일(Resend 등 키 필요).
 - [ ] 스캔 이력 보존 정책, 인포스틸러 추이 차트.
-- [ ] (선택) 사용자 메일 발송 자동화 — 메일 제공자 키 필요.
 
 ## 14. 알려진 이슈 / 주의
 - **관리자 비번 설정 흐름**: 재설정/초대 메일 링크 클릭 → 대시보드의 "비밀번호 설정" 폼에서 본인이 입력. (이전엔 폼이 없어 로그인만 됐던 버그 → `4140d83`에서 수정.) 로그인 상태면 우상단 "비밀번호 변경"으로도 설정. **AI는 비밀번호를 설정하지 않음(정책).**
