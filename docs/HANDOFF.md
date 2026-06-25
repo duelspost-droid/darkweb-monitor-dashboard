@@ -1,191 +1,139 @@
 # 작업 핸드오프 — 다크웹 유출 모니터링 대시보드
 
-> 다른 PC / 다음 세션에서 이어서 작업하기 위한 기록. 최신순.
+> 다음 세션/개발자가 바로 이어서 개발하기 위한 종합 기록. (최종 갱신: 2026-06-25)
+> ⚠️ 이 파일은 **공개 GitHub repo**에 커밋됩니다. **시크릿 값(비밀번호·키·service_role·SCAN_SECRET 등)은 절대 기재 금지** — 보관 위치만 표기.
 
 ## 1. 프로젝트 개요
-
 - **이름**: `darkweb-monitor-dashboard` (Credential Leak Monitor)
-- **목적**: 회사 도메인 계정이 다크웹·유출 데이터셋에 노출됐는지 **매일 자동 조회**하고,
-  웹 대시보드에 **마스킹된 형태로 기록**.
-- **스택**: Next.js 16 (App Router, Turbopack) · TypeScript · Tailwind CSS · lucide-react
-- **출신**: 원래 `foreign-resident-finance-dashboard` 안의 `/security` 페이지로 구현했다가,
-  성격이 다른 별도 제품이라 **독립 신규 프로젝트로 분리**(사용자 결정).
-- **GitHub**: 아직 미생성. 사용자가 `duelspost-droid/darkweb-monitor-dashboard`(Public) 생성 예정.
+- **목적**: JB금융그룹 계열사 도메인 계정이 다크웹/유출 데이터셋·인포스틸러 로그에 노출됐는지 **매일 자정 자동 조회**하고, **관리자 인증 후** 대시보드에 표시.
+- **스택**: Next.js 16(App Router, 정적 export) · TypeScript · Tailwind · lucide-react · **Supabase**(DB·Auth·Edge Function·pg_cron) · @supabase/supabase-js
+- **데이터 원칙**: 다크웹 직접 크롤링 금지 — 합법 유출 인텔리전스 API만. 평문 비밀번호 미저장.
 
-## 2. 현재 상태 (✅ 완성·검증)
+## 2. 현재 라이브 상태 (✅ 배포 완료)
+- **대시보드(공개 URL, 관리자 인증 게이트)**: https://duelspost-droid.github.io/darkweb-monitor-dashboard/
+  - 로그인 전엔 데이터 안 보임(RLS). 로그인 후 식별 데이터 표시.
+- **플레이그라운드 슬롯**: https://www.jbax.co.kr/ 의 "다크웹 유출 모니터링" 카드 → 위 대시보드로 링크 (repo: `duelspost-droid/jbax-www`, master).
+- **GitHub repo**: https://github.com/duelspost-droid/darkweb-monitor-dashboard (Public). Pages: Source=GitHub Actions.
+- **현재 실데이터**: 계정 유출 1건(`webmaster@jbbank.co.kr`, Epik) · 인포스틸러 819건(kjbank 464·jbbank 282·wooricap 73·jbfg 0).
 
-| 검증 | 결과 |
-|------|------|
-| `npm install` | ✅ 정상 |
-| `npm run typecheck` | ✅ 통과 |
-| `npm run build` (정적 export) | ✅ `/` 페이지 생성 성공 |
-| `npm run security:scan` | ✅ 데모 스캔 9건 생성 |
-
-- 기본은 **데모 데이터**(HIBP_API_KEY 미설정). `isDemo:true` 배너 표시.
-- git: 단일 커밋 `feat: 다크웹 유출 계정 모니터링 대시보드 (신규 독립 프로젝트)` 존재.
-  (원격(origin)은 제거된 상태 — 새 repo 만들고 직접 add.)
-
-## 3. 작업 이력 (세션별)
-
-### 2026-06-22 세션 (opus, 로컬) — Supabase 백엔드 + 실데이터 전환
-사용자 지시: "백엔드를 supabase로 구축해서 매일 자정에 유출 정보를 긁어서 대시보드에 보여줘. 실데이터를 긁어와."
-
-결정(사용자 선택): 실데이터 소스 = **무료 XposedOrNot**(계정별), 스케줄 = **Supabase Edge Function + pg_cron**, Supabase 자격증명 = **owner가 프로젝트 생성 후 키 전달**.
-
-구현:
-- **실데이터 소스 추가**: `scripts/monitor_breaches.mjs` 가 이제 (1)HIBP_API_KEY 있으면 도메인 검색 → (2)`accounts` 있으면 무료 **XposedOrNot `/v1/check-email`** 계정별 조회(키 불필요, 실데이터) → (3)둘 다 없으면 데모, 순으로 동작. 로컬 검증 완료: **실제 199건**(test@example.com) 렌더, `isDemo:false`.
-- 모니터링 대상 이메일은 `data/security/monitor_config.local.json`(**.gitignore**, 개인정보)에 `accounts` 로 둔다. base `monitor_config.json` 엔 domains/빈 accounts 만.
-- **Supabase 마이그레이션 002**: breach_findings 보강 컬럼(is_new, password_risk, industry, reference_url, breach_logo, last_scan_tag) + updated_at 트리거 + **scan_runs** 이력 테이블(RLS: 공개 읽기/service_role 쓰기).
-- **Edge Function** `supabase/functions/scan-breaches/index.ts` (Deno): XposedOrNot/HIBP 수집 → breach_findings upsert(+stale 정리: last_scan_tag) → scan_runs 기록. Node 스캐너와 동일 로직.
-- **pg_cron 003**: 매일 **15:00 UTC(=자정 KST)** Edge Function 호출. 시크릿(project_url·service_role_key)은 **Vault** 에 저장(SQL에 평문 미포함).
-- **대시보드 동기화**: `scripts/pull_from_supabase.mjs`(`npm run supabase:pull`) 가 Supabase→`lib/data/generated/breachMonitor.ts` 갱신. `.github/workflows/deploy.yml` 을 **15:30 UTC** 로 바꾸고 스캔 대신 pull→빌드→배포. Supabase 미설정 시 조용히 스킵.
-- `supabase/config.toml`, `.env.example`(NEXT_PUBLIC_*·MONITORED_*), `tsconfig.json`(supabase/functions 제외) 추가/수정.
-
-검증: `npm run typecheck` ✅ · `npm run security:scan`(실데이터 199건) ✅ · `--webpack` 정적 export 빌드 ✅ · 대시보드 실데이터 렌더 ✅.
-
-**남은 owner 작업(자격증명 필요)**: 8절 참고 — Supabase 프로젝트 생성 → 키 전달 → 마이그레이션/함수 배포/Vault/cron 설정.
-
-> ⚠️ **로컬 빌드/실행은 `--webpack` 필수** — Codex.app 번들 node 로 설치한 `@next/swc-darwin-arm64` 가 코드서명 Team ID 불일치로 dlopen 거부 → Turbopack(네이티브 필수) 실패. `npm run dev -- --webpack`, `npm run build -- --webpack`. CI(정식 node)에선 Turbopack 정상.
-
-### 2026-06-21 세션 (opus, 리모트 환경)
-사용자 지시 흐름:
-1. "다크웹을 매일 검색해서 회사 계정 유출된 거 찾아 웹에 기록" → 기능 설계.
-2. "로컬에서 작업하자" → 합법 유출 인텔 API(HIBP) 방식으로 구현(다크웹 직접 크롤링 X).
-3. "신규 프로젝트니깐 git 저장소를 신규 프로젝트로 이전" → 깨끗한 독립 앱으로 분리.
-   - 결정: **깨끗한 독립 앱** / 이름 **darkweb-monitor-dashboard** / **Public**.
-
-구현한 것:
-- `scripts/monitor_breaches.mjs`: HIBP 도메인 검색 API 수집기.
-  - 키 있으면 `GET /api/v3/breacheddomain/{domain}` 으로 실조회, 공개 `/breaches` 메타로 보강.
-  - 키 없으면 **데모 데이터** 생성(잘 알려진 유출 사건 메타 기반, `isDemo:true`).
-  - 직전 스캔과 비교해 **신규(isNew)** 표시, 이력 타임라인 누적.
-  - 계정은 항상 **마스킹**(`jo***@domain`)으로만 저장. 평문 비밀번호·전체 이메일 미저장.
-  - 출력: `data/security/latest_breach_scan.json`, `history/breach_scan_*.json`,
-    `lib/data/generated/breachMonitor.ts`(정적 사이트 임포트용).
-  - Supabase env 있으면 `breach_findings` 테이블에 최선노력 upsert.
-- `app/page.tsx`: 대시보드(KPI 4종·심각도 분포·도메인별 분포·유출 상세표·스캔 이력·운영 안내).
-- `lib/types/breachMonitor.ts`: 도메인 타입.
-- `components/ui/`: PageHero·Panel·StatTile·BarList (원본 대시보드에서 가져와 독립화).
-- `app/layout.tsx` + `app/globals.css`: 사이드바 없는 단일 페이지용 상단바 + 프리미엄 스타일.
-- `supabase/migrations/001_breach_monitoring.sql`: `breach_findings` 테이블(RLS 포함, 선택).
-- `.github/workflows/deploy.yml`: 매일 16:00 UTC 스캔 → 빌드 → GitHub Pages 배포 + 결과 커밋.
-
-**블로커(리모트 환경 한계)**:
-- 리모트 클라우드 환경에서 **새 GitHub repo 생성 불가**(`create_repository` 403),
-  다른 repo로 git push 불가(프록시가 현재 repo만 인가). → 사용자가 직접 repo 생성/푸시 필요.
-- 그래서 프로젝트를 **tar.gz 로 사용자에게 직접 전달**.
-
-## 4. 로컬에서 이어서 작업하기
-
-```bash
-# 1) 압축 해제 (전달받은 tar.gz)
-tar xzf darkweb-monitor-dashboard.tar.gz
-cd darkweb-monitor-dashboard
-
-# 2) GitHub에 빈 repo 'darkweb-monitor-dashboard'(Public) 생성 후 연결·푸시
-git remote add origin https://github.com/duelspost-droid/darkweb-monitor-dashboard.git
-git push -u origin main
-
-# 3) 개발
-npm install
-npm run security:scan        # 스캔 (HIBP_API_KEY 없으면 데모)
-npm run dev                  # http://localhost:3000
-npm run typecheck && npm run build
+## 3. 아키텍처 / 데이터 흐름
+```
+[매일 자정] pg_cron(15:00 UTC=KST 자정) → net.http_post → Edge Function `scan-breaches`
+   → XposedOrNot(계정별) + HIBP(옵션) + Hudson Rock Cavalier(도메인 전수 인포스틸러)
+   → Supabase: breach_findings / infostealer_findings / scan_runs (마스킹/집계 저장)
+[대시보드] app/page.tsx → app/DashboardClient.tsx ("use client")
+   → Supabase Auth 로그인 → 세션으로 RLS 통과 → 3개 테이블 직접 fetch → 렌더
+   ※ 정적 빌드에는 실데이터 미포함(lib/data/generated/breachMonitor.ts 는 빈 placeholder)
+[CI] .github/workflows/deploy.yml (15:30 UTC + push) → npm ci → supabase:pull(RLS로 빈값) → 빌드 → Pages 배포
 ```
 
-## 5. 실데이터 전환 (현재 데모 → 실제 유출 조회)
+## 4. 인프라 / 자격증명 (값은 안전한 곳에 보관, 여기엔 위치만)
+- **Supabase 프로젝트**: ref `elaoeffpzrswpdpfuoil` · URL `https://elaoeffpzrswpdpfuoil.supabase.co` · 리전 Seoul(ap-northeast-2) · org "duelspost-droid's Org"(Free).
+- **CLI**: `/Users/hk/.local/bin/supabase` (미로그인 상태). 대시보드 작업은 브라우저로 수행해 왔음(자세히는 12절 메모리).
+- **시크릿 보관 위치**:
+  - Supabase **Edge Function Secrets**: `SCAN_SECRET`, `MONITORED_EMAILS`, `MONITORED_DOMAINS` (+ `HIBP_API_KEY` 옵션). (Dashboard → Edge Functions → Secrets)
+  - Supabase **Vault**: `project_url`, `scan_secret` (pg_cron 용).
+  - 로컬 `.env.local`(gitignore): `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
+  - **GitHub Actions Secrets**: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
+  - **DB 비밀번호 / service_role / anon JWT / SCAN_SECRET 값**: 별도 안전 보관(여기 미기재).
 
-1. https://haveibeenpwned.com/API/Key 에서 API 키 발급(유료 구독).
-2. HIBP 대시보드에서 모니터링할 **도메인 소유 검증**(도메인 검색의 전제조건).
-3. `.env.local` 에 `HIBP_API_KEY=...` (CI 는 GitHub Secret `HIBP_API_KEY`).
-4. `data/security/monitor_config.json` 의 `domains` 를 회사 도메인으로 설정.
-   ```json
-   { "domains": ["jbfg.com"], "extraAccounts": [], "minSeverity": "low" }
-   ```
-5. `npm run security:scan` 재실행 → `isDemo:false` 실데이터로 전환.
+## 5. 데이터 소스 (전부 무료)
+- **XposedOrNot** `api.xposedornot.com/v1/check-email/{email}` — 계정별 데이터 유출(키 불필요). `/v1/breaches` 카탈로그로 메타 보강.
+- **Hudson Rock Cavalier** `cavalier.hudsonrock.com/api/json/v2/osint-tools/search-by-domain?domain=` — **도메인 전수 인포스틸러 집계**(키 불필요). 개별 이메일 점검은 `/search-by-email`(내부 도구만).
+- **HIBP**(옵션·유료): `HIBP_API_KEY` 있으면 도메인 전수 검색으로 자동 전환.
+- 다음 추가 예정: **RapidAPI(BreachDirectory)**, **IntelX** — 둘 다 무료 티어지만 가입/키 필요.
 
-## 5-B. Supabase 백엔드 배포 절차 (owner — 자격증명 필요)
+## 6. 모니터링 대상 도메인 (JB금융 4개 계열사)
+`jbfg.com`(JB금융지주) · `jbbank.co.kr`(전북은행) · `kjbank.com`(광주은행) · `wooricap.com`(JB우리캐피탈).
+- 도메인 목록: `data/security/monitor_config.json` + Supabase 시크릿 `MONITORED_DOMAINS`.
+- 무료 계정별 조회 대상 이메일: `data/security/monitor_config.local.json`(**gitignore**) + 시크릿 `MONITORED_EMAILS`.
 
-> 코드는 모두 작성됨. 아래는 자격증명이 있어야 하는 배포 단계.
+## 7. 인증 / 접근 제어
+- **관리자 로그인**: Supabase Auth `signInWithPassword` (secuday 방식). 게이트 통과해야 데이터 fetch.
+- **RLS**: breach_findings / scan_runs / infostealer_findings 의 SELECT = `authenticated`만(005 마이그레이션). anon 키로는 빈 값. service_role(Edge Function)만 쓰기.
+- **관리자 계정**: `duels@jbfg.com` (Supabase Auth). 비밀번호는 **초대/재설정 이메일 링크로 본인이 설정**(대시보드의 "비밀번호 설정/변경" 폼). ⚠️ 비번 설정 미완 가능 — 14절 참고.
+- 초대 리다이렉트: Auth → URL Configuration → Site URL = 라이브 대시보드 URL.
 
-1. **프로젝트 생성**: app.supabase.com → New project. `Project URL`, `anon key`, `service_role key` 확보.
-2. **CLI 링크 + 마이그레이션**:
-   ```bash
-   export PATH=/Users/hk/.local/bin:$PATH
-   supabase login                                  # 또는 SUPABASE_ACCESS_TOKEN
-   supabase link --project-ref <ref>
-   supabase db push                                # 001·002·003 적용
-   ```
-3. **Edge Function 시크릿 + 배포**:
-   ```bash
-   supabase secrets set MONITORED_EMAILS="a@jbfg.com,b@jbfg.com"   # 무료 경로(실계정)
-   # (유료 시) supabase secrets set HIBP_API_KEY=... MONITORED_DOMAINS="jbfg.com"
-   supabase functions deploy scan-breaches
-   ```
-4. **Vault 시크릿(cron 용, 1회)** — Studio SQL Editor:
-   ```sql
-   select vault.create_secret('https://<ref>.supabase.co', 'project_url');
-   select vault.create_secret('<SERVICE_ROLE_KEY>',        'service_role_key');
-   ```
-   (003 마이그레이션이 cron 잡 `daily-breach-scan` 을 15:00 UTC 로 등록 — 자정 KST.)
-5. **수동 1회 실행/검증**: `supabase functions invoke scan-breaches` → `breach_findings`·`scan_runs` 적재 확인.
-6. **대시보드 연결**: GitHub Secrets 에 `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` 등록 →
-   deploy.yml 이 매일 15:30 UTC pull→빌드→Pages 배포. 로컬 확인은 `.env.local` 에 같은 값 두고 `npm run supabase:pull`.
-
-## 6. 다음 작업 TODO (우선순위)
-
-### 단기
-- [ ] GitHub repo 생성 + 첫 푸시(위 4번).
-- [ ] GitHub Pages 활성화(Settings → Pages → Source: GitHub Actions). 워크플로는 이미 있음.
-      프로젝트 사이트면 basePath `/darkweb-monitor-dashboard` 가 deploy.yml 에 설정됨.
-- [ ] `HIBP_API_KEY` 발급·도메인 검증 후 실데이터 전환(5번).
-
-### 중기 (기능 확장)
-- [ ] **알림**: 신규(isNew) 유출 발견 시 Slack/이메일 웹훅 전송(scripts 에 notify 단계 추가).
-- [ ] **대상 다건**: monitor_config 에 여러 도메인/개별 계정(extraAccounts) 운영.
-- [ ] **조치 추적**: 발견 항목별 "처리 상태"(비밀번호 재설정 완료 등) 토글 — Supabase 컬럼 추가.
-- [ ] **이력 차트**: 스캔 이력(history)을 Recharts 라인차트로(현재는 리스트). recharts 의존성 추가 필요.
-- [ ] **HIBP 페이지네이션/레이트리밋**: 대형 도메인 대비 429 백오프, `Retry-After` 처리.
-- [ ] **추가 소스(선택)**: DeHashed/IntelX/LeakCheck 등 — 각 API 키·약관 검토 후 콜렉터 추가.
-
-### 운영/품질
-- [ ] 스캔 이력 스냅샷(`data/security/history/*.json`)이 누적되므로 보존 기간 정책(예: 90일) 정리.
-- [ ] Supabase 연동 시 `001_breach_monitoring.sql` 적용 + `SUPABASE_URL`/`SERVICE_ROLE_KEY` 설정.
-
-## 7. 파일 구조
-
+## 8. 파일 구조 (핵심)
 ```
-darkweb-monitor-dashboard/
-├─ app/
-│  ├─ page.tsx              대시보드(서버 컴포넌트, breachScan 임포트)
-│  ├─ layout.tsx            상단바 + 컨테이너
-│  └─ globals.css           프리미엄 스타일(hero/surface/stat-tile/chip/barlist)
-├─ components/ui/           PageHero·Panel·StatTile·BarList
-├─ lib/
-│  ├─ types/breachMonitor.ts            도메인 타입
-│  └─ data/generated/breachMonitor.ts   ★자동 생성(편집 금지) — 페이지가 임포트
-├─ scripts/monitor_breaches.mjs         수집기(이 파일을 수정)
-├─ data/security/
-│  ├─ monitor_config.json   ★대상 도메인 설정(여기 수정)
-│  ├─ latest_breach_scan.json   원본 기록
-│  └─ history/*.json            스캔 스냅샷
-├─ supabase/migrations/001_breach_monitoring.sql
-├─ .github/workflows/deploy.yml
-└─ README.md · package.json · tsconfig.json · tailwind.config.ts · next.config.mjs
+app/
+  page.tsx                얇은 래퍼 → <DashboardClient/>
+  DashboardClient.tsx     ★로그인 게이트 + 비번설정폼 + Supabase fetch + 전체 렌더
+  layout.tsx, globals.css
+components/ui/            PageHero·Panel·StatTile·BarList
+lib/
+  supabase/browserClient.ts   anon 클라이언트(브라우저)
+  types/breachMonitor.ts      BreachFinding·InfostealerFinding·SourceRecord·BreachScan
+  data/generated/breachMonitor.ts  ★빈 placeholder(정적빌드에 실데이터 X)
+scripts/
+  monitor_breaches.mjs        로컬/CI 수집기(XposedOrNot/HIBP + Cavalier + 출처)
+  pull_from_supabase.mjs       Supabase→생성TS (RLS로 빈값; auth 전환 후 사실상 미사용)
+  check_employee_stealers.mjs  ★내부 전용: 임직원 계정 개별 인포스틸러 점검(결과 gitignore)
+supabase/
+  functions/scan-breaches/index.ts   ★Deno Edge Function(verify_jwt=false, x-scan-secret)
+  migrations/001~005.sql             스키마·scan_runs·인포스틸러·cron·RLS잠금
+  config.toml
+.github/workflows/deploy.yml
+data/security/monitor_config.json    (+ *.local.json/.local.html 은 gitignore)
 ```
 
-## 8. 개인정보·보안 원칙
-
-- 계정은 **마스킹**된 형태로만 저장. 평문 비밀번호·전체 이메일·기타 식별자 미저장.
-- 다크웹 직접 크롤링 금지 — 합법 유출 인텔리전스 API 조회만 수행.
-- 유출 확인 계정은 즉시 **비밀번호 재설정 + MFA** 권고, 동일 비밀번호 재사용 서비스 점검.
-
-## 9. 검증 명령
-
+## 9. 로컬 개발 (중요한 환경 제약)
+- **node/npm이 PATH에 없음** → `export PATH=/Applications/Codex.app/Contents/Resources/cua_node/bin:$PATH` (node24, npm11).
+- **dev/build는 `--webpack` 필수**: Codex node로 설치한 `@next/swc-darwin-arm64`가 코드서명 Team ID 불일치로 dlopen 거부 → Turbopack 실패. `npm run dev -- --webpack`, `npm run build -- --webpack`. (CI 정식 node는 Turbopack 정상)
+- **preview 런처**: `/Users/hk/.claude/launch.json`의 `darkweb` config (sh -c로 PATH+cd+`npm run dev -- --webpack`, port 3000).
+- **.env.local** 필요(NEXT_PUBLIC_SUPABASE_URL/ANON_KEY) — 로그인+fetch 동작.
 ```bash
 npm install
-npm run typecheck                                   # 성공
-NEXT_OUTPUT=export PAGES_BASE_PATH=/darkweb-monitor-dashboard npm run build  # 성공
-npm run security:scan                               # 스캔(데모/실데이터)
-npm run dev                                          # http://localhost:3000
+npm run typecheck
+npm run dev -- --webpack                  # http://localhost:3000 (로그인 게이트)
+npm run security:scan                      # 로컬 수집(시크릿 없이 동작, Supabase 적재는 SUPABASE_* 있을 때)
+npm run security:employee                  # 내부 전용 임직원 개별 점검(결과 gitignore)
+NEXT_OUTPUT=export PAGES_BASE_PATH=/darkweb-monitor-dashboard npm run build -- --webpack
+```
+
+## 10. 배포 / 운영
+- **자동 수집**: pg_cron `daily-breach-scan` 15:00 UTC → Edge Function. (003 마이그레이션, Vault 시크릿 사용)
+- **함수 재배포**: Supabase Dashboard → Edge Functions → scan-breaches → Code → Deploy. (CLI 미로그인이라 브라우저로 해 왔음; index.ts를 base64로 Monaco에 주입 → Deploy)
+- **마이그레이션 적용**: 브라우저 SQL Editor에 붙여 실행(한글 주석은 pbcopy가 깨져 ASCII로 변환 후 붙임).
+- **대시보드 배포**: main 푸시 또는 15:30 UTC → GitHub Actions → Pages.
+- **수동 함수 호출(테스트)**: `POST {URL}/functions/v1/scan-breaches` + 헤더 `x-scan-secret: <SCAN_SECRET>`.
+
+## 11. 작업 이력 (커밋 / 세션 로그)
+- `6d09697` 신규 프로젝트(데모 데이터, HIBP 전제)
+- `5bf789b` HANDOFF + CLAUDE
+- `952ecf9` **Supabase 백엔드**(Edge Function + pg_cron 자정 + XposedOrNot 실데이터 + 대시보드 동기화)
+- `c82177c` 모니터링 대상 = **JB금융 4개 계열사 도메인**
+- `aa21cbd` **Hudson Rock Cavalier 도메인 전수 인포스틸러 + 수집 출처(provenance) 기록**
+- `4ddd8c7` **관리자 인증(Supabase Auth) 비공개 대시보드 + RLS 잠금**(정적빌드 실데이터 제거)
+- `4140d83` 초대/재설정 링크 진입 시 **비밀번호 설정 폼** 표시 fix
+- (그 사이 CI "Update dashboard snapshot" 자동 커밋 다수)
+- 별도: `duelspost-droid/jbax-www` 에 플레이그라운드 슬롯 카드 추가(master).
+
+## 12. 보안 · 개인정보 원칙 (반드시 준수)
+- 계정은 기본 **마스킹** 저장. **회사 소유 계정**만 인증 뒤 식별(full) 표시(breach_findings.account).
+- **고객(은행 고객) 개인 식별·평문 비밀번호는 미구축** — 개인정보보호법·신용정보법·금융규제·계정탈취 위험. 고객은 **집계(감염 건수)+영향 URL**까지만.
+- **공개 페이지엔 실데이터 미노출**(RLS+인증). 정적 빌드/공개 repo에 데이터 안 남김.
+- 임직원 개별 점검(PC명·부분IP·부분비번)은 **로컬 내부 전용**(`security:employee`, 결과 gitignore).
+- "공개 유지(마스킹 실데이터)"는 사용자 결정이었으나, 인증 전환으로 현재는 로그인 필요. 민감도 커지면 비공개 호스팅 검토.
+
+## 13. 미완 / 다음 TODO
+- [ ] **관리자 비밀번호 설정 완료**(14절) — 로그인 동작 최종 확인(로그인 후 화면은 비번 없어 미검증).
+- [ ] **RapidAPI(BreachDirectory) · IntelX 소스 추가**(무료 티어, 키 발급 필요) — 같은 패턴(수집기+출처+섹션).
+- [ ] HIBP 유료키 도입 시 도메인 전수(계정별→도메인) 자동 전환 검증.
+- [ ] 알림(신규 발견 시 Slack/메일 웹훅), 보고서 자동 이메일(Resend 등 키 필요).
+- [ ] 스캔 이력 보존 정책, 인포스틸러 추이 차트.
+- [ ] (선택) 사용자 메일 발송 자동화 — 메일 제공자 키 필요.
+
+## 14. 알려진 이슈 / 주의
+- **관리자 비번 설정 흐름**: 재설정/초대 메일 링크 클릭 → 대시보드의 "비밀번호 설정" 폼에서 본인이 입력. (이전엔 폼이 없어 로그인만 됐던 버그 → `4140d83`에서 수정.) 로그인 상태면 우상단 "비밀번호 변경"으로도 설정. **AI는 비밀번호를 설정하지 않음(정책).**
+- **Supabase 무료 SMTP 발송 한도** — 초대/재설정 메일이 안 올 수 있음. 안 오면 잠시 후 재시도 또는 Auth→Emails에 SMTP 설정.
+- **Cavalier 무료 티어**: 도메인 단위 집계 + URL 까지(개별 이메일은 search-by-email로 단건만, 전수 식별은 유료).
+- **로컬 빌드 `--webpack` 필수**(9절).
+
+## 15. 검증 명령
+```bash
+npm run typecheck                                   # 통과
+NEXT_OUTPUT=export PAGES_BASE_PATH=/darkweb-monitor-dashboard npm run build -- --webpack  # 성공
+curl -s "{URL}/rest/v1/breach_findings?select=finding_id" -H "apikey: {ANON}" -H "Authorization: Bearer {ANON}"  # → [] (RLS 잠금 확인)
+# 라이브: https://duelspost-droid.github.io/darkweb-monitor-dashboard/ → 관리자 로그인 게이트
 ```
