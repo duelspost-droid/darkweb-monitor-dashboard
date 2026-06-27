@@ -794,6 +794,32 @@ export default function DashboardClient() {
         </div>
       </div>
 
+      {/* 스캔 상태 배너 — 자정 배치 성공/실패·지연을 상단에서 즉시 인지 */}
+      {(() => {
+        const ageH = (Date.now() - new Date(scan.generatedAt).getTime()) / 3600000;
+        const stale = !Number.isNaN(ageH) && ageH > 26;
+        const ok = scan.status === "ok" && !stale;
+        if (ok) {
+          return (
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl border border-teal-200 bg-teal-50 px-4 py-2 text-xs text-teal-800">
+              <ShieldCheck size={14} className="shrink-0" aria-hidden />
+              <span className="font-bold">스캔 정상</span>
+              <span className="text-teal-700">최근 스캔 {fmtDate(scan.generatedAt)} · 수집 출처 {sources.length}종{summary.newCount > 0 ? ` · 신규 ${summary.newCount}건` : ""}</span>
+            </div>
+          );
+        }
+        return (
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl border border-rose-300 bg-rose-50 px-4 py-2.5 text-xs text-rose-800">
+            <AlertTriangle size={15} className="shrink-0" aria-hidden />
+            <span className="font-bold">{stale ? "스캔 지연" : "스캔 이상"}</span>
+            <span className="text-rose-700">
+              {stale ? `최근 스캔이 약 ${Math.floor(ageH)}시간 전입니다 — 자정 배치가 멈췄을 수 있어 점검이 필요합니다.` : `상태: ${scan.status}`}
+              {scan.note ? ` · ${scan.note}` : ""}
+            </span>
+          </div>
+        );
+      })()}
+
       <PageHero
         kicker="보안 · 다크웹 유출 모니터링 (관리자)"
         title="회사 계정 유출 모니터링"
