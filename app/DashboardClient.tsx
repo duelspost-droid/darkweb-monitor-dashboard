@@ -141,6 +141,13 @@ function AccountGroupedFindings({ findings, onChanged }: { findings: GroupingFin
   const [bulkBusy, setBulkBusy] = useState("");
   const [bulkErr, setBulkErr] = useState("");
 
+  // 재스캔/리로드로 사라진 계정 키를 selected·expanded 에서 정리(유령 선택 방지)
+  useEffect(() => {
+    const valid = new Set(findings.map((f) => f.accountMasked));
+    setSelected((s) => { const n = new Set([...s].filter((k) => valid.has(k))); return n.size === s.size ? s : n; });
+    setExpanded((s) => { const n = new Set([...s].filter((k) => valid.has(k))); return n.size === s.size ? s : n; });
+  }, [findings]);
+
   const map = new Map<string, Grp>();
   for (const f of findings) {
     let g = map.get(f.accountMasked);
@@ -161,33 +168,41 @@ function AccountGroupedFindings({ findings, onChanged }: { findings: GroupingFin
   });
   for (const g of groups) g.exposures.sort((x, y) => (y.date || "").localeCompare(x.date || ""));
 
-  const counts: Record<string, number> = { all: groups.length, open: 0, remediated: 0, dismissed: 0 };
-  for (const g of groups) counts[g.status] = (counts[g.status] ?? 0) + 1;
-
+  // 칩 카운트는 "검색 적용 후" 집합 기준(상태필터는 제외)으로 집계 → 보이는 목록과 숫자 일치
   const q = query.trim().toLowerCase();
-  const filtered = groups.filter((g) =>
-    (statusFilter === "all" || (g.status || "open") === statusFilter) &&
-    (!q || g.accountMasked.toLowerCase().includes(q) || g.domain.toLowerCase().includes(q)),
+  const searchMatched = groups.filter((g) =>
+    !q || g.accountMasked.toLowerCase().includes(q) || g.domain.toLowerCase().includes(q),
   );
+  const counts: Record<string, number> = { all: searchMatched.length, open: 0, remediated: 0, dismissed: 0 };
+  for (const g of searchMatched) counts[g.status] = (counts[g.status] ?? 0) + 1;
+
+  const filtered = searchMatched.filter((g) => statusFilter === "all" || (g.status || "open") === statusFilter);
   const allSel = filtered.length > 0 && filtered.every((g) => selected.has(g.accountMasked));
   const allExp = filtered.length > 0 && filtered.every((g) => expanded.has(g.accountMasked));
   const toggleSel = (a: string) => setSelected((s) => { const n = new Set(s); if (n.has(a)) n.delete(a); else n.add(a); return n; });
   const toggleExp = (a: string) => setExpanded((s) => { const n = new Set(s); if (n.has(a)) n.delete(a); else n.add(a); return n; });
 
+  // 화면에 보이는(filtered) 선택만 일괄대상 — 검색/필터로 가려진 계정엔 적용 안 함
+  const visibleSel = filtered.filter((g) => selected.has(g.accountMasked));
+
   async function bulkApply(status: string) {
-    if (!selected.size) return;
+    const targets = filtered.filter((g) => selected.has(g.accountMasked));
+    if (!targets.length) return;
     setBulkBusy(status); setBulkErr("");
+    const fails: string[] = [];
+    let ok = 0;
     try {
-      for (const acct of [...selected]) {
-        const { error } = await supabase.rpc("set_remediation", { p_account: acct, p_status: status, p_note: null });
-        if (error) throw new Error(error.message);
+      // 기존 메모(note)는 보존하며 상태만 변경 (일괄 시 메모 유실 방지)
+      for (const g of targets) {
+        const { error } = await supabase.rpc("set_remediation", { p_account: g.accountMasked, p_status: status, p_note: g.note ?? null });
+        if (error) fails.push(g.accountMasked);
+        else ok++;
       }
+    } finally {
       setSelected(new Set());
       onChanged();
-    } catch (e) {
-      setBulkErr("일괄 저장 실패: " + ((e as Error)?.message ?? String(e)));
-    } finally {
       setBulkBusy("");
+      setBulkErr(fails.length ? `${ok}건 처리 · ${fails.length}건 실패` : "");
     }
   }
 
@@ -199,29 +214,30 @@ function AccountGroupedFindings({ findings, onChanged }: { findings: GroupingFin
 
   return (
     <div className="p-4">
-      <div className="sticky top-0 z-20 -mx-4 mb-2 flex flex-wrap items-center gap-2 border-b border-slate-100 bg-white/95 px-4 pb-2.5 pt-1 backdrop-blur">
-        <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="계정·도메인 검색" className="w-40 rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm outline-none focus:border-sky-400" />
-        <div className="inline-flex flex-wrap gap-1">
-          {FILTERS.map((f) => (
-            <button key={f.key} onClick={() => setStatusFilter(f.key)} className={`rounded-full border px-2.5 py-1 text-xs font-medium ${statusFilter === f.key ? "border-sky-400 bg-sky-100 text-sky-800" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"}`}>{f.label} {counts[f.key] ?? 0}</button>
-          ))}
+      <div className="sticky top-0 z-20 -mx-4 mb-2 border-b border-slate-100 bg-white/95 px-4 pb-2.5 pt-1 backdrop-blur">
+        <div className="flex flex-wrap items-center gap-2">
+          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="계정·도메인 검색" className="w-40 rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm outline-none focus:border-sky-400" />
+          <div className="inline-flex flex-wrap gap-1">
+            {FILTERS.map((f) => (
+              <button key={f.key} onClick={() => setStatusFilter(f.key)} className={`rounded-full border px-2.5 py-1 text-xs font-medium ${statusFilter === f.key ? "border-sky-400 bg-sky-100 text-sky-800" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"}`}>{f.label} {counts[f.key] ?? 0}</button>
+            ))}
+          </div>
+          <span className="ml-auto inline-flex items-center gap-1.5">
+            <button onClick={() => setSelected(allSel ? new Set() : new Set(filtered.map((g) => g.accountMasked)))} className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50">{allSel ? "선택해제" : "전체선택"}</button>
+            <button onClick={() => setExpanded(allExp ? new Set() : new Set(filtered.map((g) => g.accountMasked)))} className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50">{allExp ? "전체접기" : "전체펼치기"}</button>
+          </span>
         </div>
-        <span className="ml-auto inline-flex items-center gap-1.5">
-          <button onClick={() => setSelected(allSel ? new Set() : new Set(filtered.map((g) => g.accountMasked)))} className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50">{allSel ? "선택해제" : "전체선택"}</button>
-          <button onClick={() => setExpanded(allExp ? new Set() : new Set(filtered.map((g) => g.accountMasked)))} className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50">{allExp ? "전체접기" : "전체펼치기"}</button>
-        </span>
+        {visibleSel.length > 0 && (
+          <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2">
+            <span className="text-xs font-semibold text-sky-800">{visibleSel.length}개 선택 — 일괄조치:</span>
+            <button onClick={() => bulkApply("remediated")} disabled={!!bulkBusy} className="rounded-lg bg-teal-600 px-2.5 py-1 text-xs font-bold text-white hover:bg-teal-700 disabled:opacity-50">{bulkBusy === "remediated" ? "저장…" : "조치완료"}</button>
+            <button onClick={() => bulkApply("dismissed")} disabled={!!bulkBusy} className="rounded-lg bg-sky-600 px-2.5 py-1 text-xs font-bold text-white hover:bg-sky-700 disabled:opacity-50">{bulkBusy === "dismissed" ? "저장…" : "이상없음"}</button>
+            <button onClick={() => bulkApply("open")} disabled={!!bulkBusy} className="rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-100 disabled:opacity-50">{bulkBusy === "open" ? "저장…" : "미조치"}</button>
+            <button onClick={() => setSelected(new Set())} className="text-xs font-medium text-slate-500 hover:underline">해제</button>
+            {bulkErr && <span className="text-[11px] font-semibold text-rose-600">{bulkErr}</span>}
+          </div>
+        )}
       </div>
-
-      {selected.size > 0 && (
-        <div className="sticky top-[46px] z-10 mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2">
-          <span className="text-xs font-semibold text-sky-800">{selected.size}개 선택 — 일괄조치:</span>
-          <button onClick={() => bulkApply("remediated")} disabled={!!bulkBusy} className="rounded-lg bg-teal-600 px-2.5 py-1 text-xs font-bold text-white hover:bg-teal-700 disabled:opacity-50">{bulkBusy === "remediated" ? "저장…" : "조치완료"}</button>
-          <button onClick={() => bulkApply("dismissed")} disabled={!!bulkBusy} className="rounded-lg bg-sky-600 px-2.5 py-1 text-xs font-bold text-white hover:bg-sky-700 disabled:opacity-50">{bulkBusy === "dismissed" ? "저장…" : "이상없음"}</button>
-          <button onClick={() => bulkApply("open")} disabled={!!bulkBusy} className="rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-100 disabled:opacity-50">{bulkBusy === "open" ? "저장…" : "미조치"}</button>
-          <button onClick={() => setSelected(new Set())} className="text-xs font-medium text-slate-500 hover:underline">해제</button>
-          {bulkErr && <span className="text-[11px] font-semibold text-rose-600">{bulkErr}</span>}
-        </div>
-      )}
 
       <div className="space-y-2">
         {filtered.map((g) => {
@@ -773,7 +789,7 @@ export default function DashboardClient() {
         <AccountGroupedFindings findings={scan.findings} onChanged={load} />
       </Panel>
 
-      <RemediationLogPanel reloadKey={scan.findings.map((f) => `${f.id}:${f.status}`).join("|")} />
+      <RemediationLogPanel reloadKey={scan.findings.map((f) => `${f.id}:${f.status}:${f.remediatedAt}`).join("|")} />
 
       <Panel title="인포스틸러 점검이란?" subtitle="다크웹 정보탈취 악성코드(인포스틸러) 감염 점검의 개념과 방법">
         <div className="grid gap-4 text-sm leading-6 text-slate-700 lg:grid-cols-2">
