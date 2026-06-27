@@ -80,6 +80,31 @@ const isoDate = (iso?: string) => (iso ? String(iso).slice(0, 10) : "");
 const koClasses = (l: string[]) => (l ?? []).map((dc) => DATA_CLASS_KO[dc] ?? dc);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// fetch 타임아웃 래퍼 — 느린 외부 소스가 전체 스캔을 무한정 묶지 않도록 AbortController 적용(기본 12s).
+function fetchT(url: string, opts: RequestInit = {}, ms = 12000): Promise<Response> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  return fetch(url, { ...opts, signal: ctrl.signal }).finally(() => clearTimeout(t));
+}
+
+// 관제(SOC) 알림 — NOTIFY_WEBHOOK_URL(Slack/Teams/일반 웹훅) 설정 시 신규 유출/스캔 이상을 능동 통지.
+// 본문은 건수·요약·대시보드 링크만(계정/비번 등 PII 미포함 — 평문 채널 안전). 미설정 시 조용히 skip.
+const NOTIFY_WEBHOOK_URL = Deno.env.get("NOTIFY_WEBHOOK_URL");
+const DASHBOARD_URL = Deno.env.get("DASHBOARD_URL") || "https://dark.jbax.co.kr";
+async function maybeNotify(s: { status: string; newCount: number; total: number; summary: Record<string, number>; infTotal: number; note: string | null }) {
+  if (!NOTIFY_WEBHOOK_URL) return;
+  const isErr = s.status === "error";
+  if (!isErr && s.newCount <= 0) return; // 정상 + 신규 없음이면 알릴 내용 없음
+  const title = isErr ? "🚨 다크웹 모니터링 · 스캔 이상" : `⚠️ 다크웹 모니터링 · 신규 유출 ${s.newCount}건`;
+  const body = isErr
+    ? `상태: ${s.status}${s.note ? ` · ${s.note}` : ""}`
+    : `신규 ${s.newCount}건 / 총 ${s.total}건 (심각 ${s.summary.critical} · 높음 ${s.summary.high}) · 인포스틸러 ${s.infTotal}건`;
+  const text = `${title}\n${body}\n${DASHBOARD_URL}`;
+  try {
+    await fetchT(NOTIFY_WEBHOOK_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) }, 8000);
+  } catch (_e) { /* 알림 실패가 스캔을 죽이지 않게 무시 */ }
+}
+
 // 견고한 JSON fetch: 429/5xx 는 Retry-After/지수 백오프로 재시도. 실패해도 throw 안 함.
 // deno-lint-ignore no-explicit-any
 async function fetchJson(url: string, init: { headers?: Record<string, string>; method?: string; body?: string } = {}, opts: { retries?: number; baseDelay?: number } = {}): Promise<{ ok: boolean; status: number; data: any }> {
@@ -87,7 +112,7 @@ async function fetchJson(url: string, init: { headers?: Record<string, string>; 
   const { retries = 2, baseDelay = 800 } = opts;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      const res = await fetch(url, { method, headers: { "user-agent": UA, ...headers }, body });
+      const res = await fetchT(url, { method, headers: { "user-agent": UA, ...headers }, body });
       if ((res.status === 429 || res.status >= 500) && attempt < retries) {
         const ra = Number(res.headers.get("retry-after"));
         await sleep(ra ? ra * 1000 : baseDelay * (attempt + 1));
@@ -109,7 +134,7 @@ interface Catalog { [k: string]: { title: string; date: string; dataClasses: str
 
 async function loadXonCatalog(): Promise<Catalog> {
   try {
-    const res = await fetch(`${XON_BASE}/breaches`, { headers: { "user-agent": UA } });
+    const res = await fetchT(`${XON_BASE}/breaches`, { headers: { "user-agent": UA } });
     if (!res.ok) return {};
     const body = await res.json();
     const arr = Array.isArray(body) ? body : body.exposedBreaches ?? [];
@@ -126,7 +151,7 @@ async function loadXonCatalog(): Promise<Catalog> {
 }
 async function xonCheckEmail(email: string): Promise<string[]> {
   try {
-    const res = await fetch(`${XON_BASE}/check-email/${encodeURIComponent(email)}`, { headers: { "user-agent": UA } });
+    const res = await fetchT(`${XON_BASE}/check-email/${encodeURIComponent(email)}`, { headers: { "user-agent": UA } });
     if (!res.ok) return [];
     const body = await res.json();
     if (body?.Error) return [];
@@ -138,7 +163,7 @@ async function xonCheckEmail(email: string): Promise<string[]> {
 }
 async function loadHibpCatalog(): Promise<Catalog> {
   try {
-    const res = await fetch(`${HIBP_BASE}/breaches`, { headers: { "user-agent": UA } });
+    const res = await fetchT(`${HIBP_BASE}/breaches`, { headers: { "user-agent": UA } });
     if (!res.ok) return {};
     const arr = await res.json();
     const map: Catalog = {};
@@ -149,7 +174,7 @@ async function loadHibpCatalog(): Promise<Catalog> {
 async function hibpDomain(domain: string): Promise<Record<string, string[]> | null> {
   // 도메인 전수 검색 대비: 429 는 Retry-After 만큼 대기 후 재시도.
   for (let attempt = 0; attempt < 4; attempt++) {
-    const res = await fetch(`${HIBP_BASE}/breacheddomain/${encodeURIComponent(domain)}`, {
+    const res = await fetchT(`${HIBP_BASE}/breacheddomain/${encodeURIComponent(domain)}`, {
       headers: { "hibp-api-key": HIBP_API_KEY!, "user-agent": UA },
     });
     if (res.status === 404 || res.status === 204) return null;
@@ -174,7 +199,7 @@ async function collectCavalier(domains: string[], nowIso: string): Promise<Infos
   const out: Infostealer[] = [];
   for (const domain of domains) {
     try {
-      const res = await fetch(`${CAVALIER_BASE}/search-by-domain?domain=${encodeURIComponent(domain)}`, { headers: { "user-agent": UA } });
+      const res = await fetchT(`${CAVALIER_BASE}/search-by-domain?domain=${encodeURIComponent(domain)}`, { headers: { "user-agent": UA } });
       if (!res.ok) continue;
       const d = await res.json();
       const urls = (d?.data?.all_urls ?? []).slice(0, 30).map((u: { url: string; type: string; occurrence: number }) => ({ url: u.url, type: u.type, occurrence: u.occurrence }));
@@ -520,14 +545,14 @@ async function mkRawFinding(
 // ── Supabase REST helpers ──────────────────────────────────────────────────
 const sbHeaders = { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json" };
 async function sbGetExistingIds(): Promise<Set<string>> {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/breach_findings?select=finding_id`, { headers: sbHeaders });
+  const res = await fetchT(`${SUPABASE_URL}/rest/v1/breach_findings?select=finding_id`, { headers: sbHeaders });
   if (!res.ok) return new Set();
   const rows = await res.json();
   return new Set(rows.map((r: { finding_id: string }) => r.finding_id));
 }
 async function sbUpsert(rows: unknown[]) {
   if (!rows.length) return;
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/breach_findings?on_conflict=finding_id`, {
+  const res = await fetchT(`${SUPABASE_URL}/rest/v1/breach_findings?on_conflict=finding_id`, {
     method: "POST",
     headers: { ...sbHeaders, Prefer: "resolution=merge-duplicates,return=minimal" },
     body: JSON.stringify(rows),
@@ -536,20 +561,20 @@ async function sbUpsert(rows: unknown[]) {
 }
 async function sbDeleteStale(scanTag: string) {
   // 이번 스캔에서 안 본 항목(다른 tag 또는 null) 제거 = 현재 노출만 유지.
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/breach_findings?or=(last_scan_tag.neq.${scanTag},last_scan_tag.is.null)`, {
+  const res = await fetchT(`${SUPABASE_URL}/rest/v1/breach_findings?or=(last_scan_tag.neq.${scanTag},last_scan_tag.is.null)`, {
     method: "DELETE", headers: { ...sbHeaders, Prefer: "return=minimal" },
   });
   if (!res.ok) console.warn(`stale delete HTTP ${res.status}`);
 }
 async function sbInsertScanRun(run: unknown) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/scan_runs`, {
+  const res = await fetchT(`${SUPABASE_URL}/rest/v1/scan_runs`, {
     method: "POST", headers: { ...sbHeaders, Prefer: "return=minimal" }, body: JSON.stringify(run),
   });
   if (!res.ok) console.warn(`scan_run insert HTTP ${res.status}`);
 }
 async function sbUpsertInfostealer(rows: Infostealer[]) {
   if (!rows.length) return;
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/infostealer_findings?on_conflict=domain`, {
+  const res = await fetchT(`${SUPABASE_URL}/rest/v1/infostealer_findings?on_conflict=domain`, {
     method: "POST",
     headers: { ...sbHeaders, Prefer: "resolution=merge-duplicates,return=minimal" },
     body: JSON.stringify(rows),
@@ -558,7 +583,7 @@ async function sbUpsertInfostealer(rows: Infostealer[]) {
 }
 async function sbUpsertInfostealerHosts(rows: InfostealerHostRow[]) {
   if (!rows.length) return;
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/infostealer_hosts?on_conflict=host_id`, {
+  const res = await fetchT(`${SUPABASE_URL}/rest/v1/infostealer_hosts?on_conflict=host_id`, {
     method: "POST",
     headers: { ...sbHeaders, Prefer: "resolution=merge-duplicates,return=minimal" },
     body: JSON.stringify(rows),
@@ -567,7 +592,7 @@ async function sbUpsertInfostealerHosts(rows: InfostealerHostRow[]) {
 }
 async function sbDeleteStaleHosts(scanTag: string) {
   // 이번 스캔에서 안 본 호스트 제거 = 현재 모니터링 계정의 감염만 유지.
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/infostealer_hosts?or=(last_scan_tag.neq.${scanTag},last_scan_tag.is.null)`, {
+  const res = await fetchT(`${SUPABASE_URL}/rest/v1/infostealer_hosts?or=(last_scan_tag.neq.${scanTag},last_scan_tag.is.null)`, {
     method: "DELETE", headers: { ...sbHeaders, Prefer: "return=minimal" },
   });
   if (!res.ok) console.warn(`infostealer_hosts stale delete HTTP ${res.status}`);
@@ -745,6 +770,9 @@ Deno.serve(async (req) => {
     domains: [...new Set([...MONITORED_DOMAINS, ...findings.map((f) => f.domain)])],
     sources, note,
   });
+
+  // 관제 알림 — 신규 유출 또는 스캔 이상 시 통지(웹훅 미설정이면 skip)
+  await maybeNotify({ status, newCount, total: findings.length, summary, infTotal, note });
 
   return new Response(JSON.stringify({
     ok: status !== "error", status, source, total: findings.length, newCount, summary,
