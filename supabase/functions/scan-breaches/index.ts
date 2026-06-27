@@ -87,12 +87,16 @@ function fetchT(url: string, opts: RequestInit = {}, ms = 12000): Promise<Respon
   return fetch(url, { ...opts, signal: ctrl.signal }).finally(() => clearTimeout(t));
 }
 
-// 관제(SOC) 알림 — NOTIFY_WEBHOOK_URL(Slack/Teams/일반 웹훅) 설정 시 신규 유출/스캔 이상을 능동 통지.
-// 본문은 건수·요약·대시보드 링크만(계정/비번 등 PII 미포함 — 평문 채널 안전). 미설정 시 조용히 skip.
+// 관제(SOC) 알림 — 신규 유출/스캔 이상을 능동 통지. 이메일(Resend) 또는 웹훅(Slack/Teams) 지원.
+// 본문은 건수·요약·대시보드 링크만(계정/비번 등 PII 미포함). 시크릿 미설정 채널은 조용히 skip.
+//  · 이메일: RESEND_API_KEY + NOTIFY_EMAIL(수신주소) 설정 시. 발신은 NOTIFY_EMAIL_FROM(기본 onboarding@resend.dev).
+//  · 웹훅:   NOTIFY_WEBHOOK_URL 설정 시.
 const NOTIFY_WEBHOOK_URL = Deno.env.get("NOTIFY_WEBHOOK_URL");
+const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
+const NOTIFY_EMAIL = Deno.env.get("NOTIFY_EMAIL"); // 수신 주소(레포에 비공개 — 시크릿)
+const NOTIFY_EMAIL_FROM = Deno.env.get("NOTIFY_EMAIL_FROM") || "onboarding@resend.dev";
 const DASHBOARD_URL = Deno.env.get("DASHBOARD_URL") || "https://dark.jbax.co.kr";
 async function maybeNotify(s: { status: string; newCount: number; total: number; summary: Record<string, number>; infTotal: number; note: string | null }) {
-  if (!NOTIFY_WEBHOOK_URL) return;
   const isErr = s.status === "error";
   if (!isErr && s.newCount <= 0) return; // 정상 + 신규 없음이면 알릴 내용 없음
   const title = isErr ? "🚨 다크웹 모니터링 · 스캔 이상" : `⚠️ 다크웹 모니터링 · 신규 유출 ${s.newCount}건`;
@@ -100,9 +104,22 @@ async function maybeNotify(s: { status: string; newCount: number; total: number;
     ? `상태: ${s.status}${s.note ? ` · ${s.note}` : ""}`
     : `신규 ${s.newCount}건 / 총 ${s.total}건 (심각 ${s.summary.critical} · 높음 ${s.summary.high}) · 인포스틸러 ${s.infTotal}건`;
   const text = `${title}\n${body}\n${DASHBOARD_URL}`;
-  try {
-    await fetchT(NOTIFY_WEBHOOK_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) }, 8000);
-  } catch (_e) { /* 알림 실패가 스캔을 죽이지 않게 무시 */ }
+  // 1) 이메일 (Resend)
+  if (RESEND_API_KEY && NOTIFY_EMAIL) {
+    try {
+      await fetchT("https://api.resend.com/emails", {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ from: NOTIFY_EMAIL_FROM, to: [NOTIFY_EMAIL], subject: title, text }),
+      }, 8000);
+    } catch (_e) { /* 알림 실패가 스캔을 죽이지 않게 무시 */ }
+  }
+  // 2) 웹훅 (Slack/Teams/일반)
+  if (NOTIFY_WEBHOOK_URL) {
+    try {
+      await fetchT(NOTIFY_WEBHOOK_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) }, 8000);
+    } catch (_e) { /* 무시 */ }
+  }
 }
 
 // 견고한 JSON fetch: 429/5xx 는 Retry-After/지수 백오프로 재시도. 실패해도 throw 안 함.
