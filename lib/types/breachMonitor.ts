@@ -41,6 +41,7 @@ export interface InfostealerFinding {
   users: number; // 사용자/고객 감염
   thirdParties: number; // 서드파티 감염
   affectedUrls: { url: string; type: string; occurrence: number }[]; // 영향받은 URL Top
+  firstSeenAt?: string; // 최초 탐지(우리 스캔에 처음 잡힌 시점) — 타임라인
   scannedAt: string;
 }
 
@@ -60,6 +61,7 @@ export interface InfostealerHost {
   totalUserServices: number; // 탈취 개인 서비스 수
   topPasswords: string[]; // 부분 마스킹 비번 샘플(평문 아님)
   topLogins: string[]; // 부분 마스킹 로그인 샘플
+  firstSeenAt?: string; // 최초 탐지 — 타임라인
   scannedAt: string;
 }
 

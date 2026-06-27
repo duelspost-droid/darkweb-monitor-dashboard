@@ -6,6 +6,7 @@ import {
   Bug,
   CalendarClock,
   Database,
+  Download,
   Globe,
   Info,
   LogOut,
@@ -24,7 +25,7 @@ import { Panel } from "@/components/ui/Panel";
 import { StatTile } from "@/components/ui/StatTile";
 import { BarList } from "@/components/ui/BarList";
 import { supabase, supabaseConfigured, adminEmail } from "@/lib/supabase/browserClient";
-import type { BreachScan, BreachSeverity } from "@/lib/types/breachMonitor";
+import type { BreachScan, BreachSeverity, InfostealerFinding, InfostealerHost } from "@/lib/types/breachMonitor";
 
 const SEVERITY_META: Record<BreachSeverity, { label: string; color: string; chip: string }> = {
   critical: { label: "심각", color: "#be123c", chip: "bg-rose-100 text-rose-700 border-rose-300" },
@@ -296,6 +297,53 @@ function fmtDate(iso: string) {
   return d.toLocaleDateString("ko-KR", { year: "numeric", month: "2-digit", day: "2-digit" });
 }
 
+// ── 관제(SOC) 내보내기 — 인포스틸러 점검내역을 CSV/JSON 파일로 다운로드(외부 전송 없음, 로컬 다운로드) ──
+function downloadFile(name: string, mime: string, content: string) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+function csvCell(v: unknown) {
+  const s = v == null ? "" : String(v);
+  const needsQuote = s.indexOf('"') >= 0 || s.indexOf(",") >= 0 || s.indexOf("\n") >= 0 || s.indexOf("\r") >= 0;
+  return needsQuote ? '"' + s.split('"').join('""') + '"' : s;
+}
+function tsStamp() {
+  return new Date().toISOString().slice(0, 16).split("-").join("").split(":").join("").split("T").join("");
+}
+function exportInfostealerCsv(items: InfostealerFinding[], hosts: InfostealerHost[]) {
+  const head = ["계열사", "도메인", "총감염", "임직원", "사용자", "서드파티", "최초탐지", "최근점검", "탈취로그인URL", "URL유형", "노출횟수"];
+  const rows: string[][] = [];
+  for (const i of items) {
+    const inst = INSTITUTIONS[i.domain] ?? i.domain;
+    const fs = i.firstSeenAt ? fmtDate(i.firstSeenAt) : "";
+    const ls = i.scannedAt ? fmtDate(i.scannedAt) : "";
+    const base = [inst, i.domain, String(i.total), String(i.employees), String(i.users), String(i.thirdParties), fs, ls];
+    if (!i.affectedUrls.length) rows.push([...base, "", "", ""]);
+    else for (const u of i.affectedUrls) rows.push([...base, u.url, u.type, String(u.occurrence)]);
+  }
+  let csv = [head, ...rows].map((r) => r.map(csvCell).join(",")).join("\r\n");
+  if (hosts.length) {
+    const hh = ["계정", "도메인", "감염일", "최초탐지", "스틸러", "PC", "OS", "IP", "사내서비스", "개인서비스", "악성코드경로"];
+    const hr = hosts.map((h) => [h.accountMasked, h.domain, h.dateCompromised ?? "", h.firstSeenAt ? fmtDate(h.firstSeenAt) : "", h.stealerFamily ?? "", h.computerName ?? "", h.operatingSystem ?? "", h.ip ?? "", String(h.totalCorporateServices), String(h.totalUserServices), h.malwarePath ?? ""]);
+    csv += "\r\n\r\n=== 감염 호스트 상세 ===\r\n" + [hh, ...hr].map((r) => r.map(csvCell).join(",")).join("\r\n");
+  }
+  downloadFile(`infostealer_inspection_${tsStamp()}.csv`, "text/csv;charset=utf-8", String.fromCharCode(0xfeff) + csv);
+}
+function exportInfostealerJson(items: InfostealerFinding[], hosts: InfostealerHost[]) {
+  const payload = {
+    generatedAt: new Date().toISOString(),
+    source: "JB금융 다크웹 인포스틸러 모니터링",
+    note: "관제(SOC) 대응용. 계정은 마스킹·비밀번호/IP는 부분 마스킹 값만 포함(평문 없음).",
+    domains: items.map((i) => ({ institution: INSTITUTIONS[i.domain] ?? i.domain, ...i })),
+    hosts,
+  };
+  downloadFile(`infostealer_inspection_${tsStamp()}.json`, "application/json;charset=utf-8", JSON.stringify(payload, null, 2));
+}
+
 // Supabase 3개 테이블 → BreachScan 조립 (관리자 인증 후 클라이언트에서).
 async function fetchScan(): Promise<BreachScan> {
   const [bf, sr, inf, hosts] = await Promise.all([
@@ -375,6 +423,7 @@ async function fetchScan(): Promise<BreachScan> {
       users: i.users,
       thirdParties: i.third_parties,
       affectedUrls: i.affected_urls ?? [],
+      firstSeenAt: i.first_seen_at ?? undefined,
       scannedAt: i.scanned_at,
     })),
     infostealerHosts: (hosts.error ? [] : hosts.data ?? []).map((h) => ({
@@ -391,6 +440,7 @@ async function fetchScan(): Promise<BreachScan> {
       totalUserServices: h.total_user_services ?? 0,
       topPasswords: h.top_passwords ?? [],
       topLogins: h.top_logins ?? [],
+      firstSeenAt: h.first_seen_at ?? undefined,
       scannedAt: h.scanned_at,
     })),
     sources: latest?.sources ?? [],
@@ -826,7 +876,13 @@ export default function DashboardClient() {
         <p className="mt-3 flex gap-2 border-t border-slate-100 pt-3 text-xs text-amber-700"><AlertTriangle size={14} className="mt-0.5 shrink-0" aria-hidden /><span>감염 확인 시: 즉시 비밀번호 재설정 + MFA 재등록 + 해당 단말의 모든 활성 세션 무효화 + 단말 백신 정밀검사/포맷을 권고합니다(세션 쿠키까지 탈취됐을 수 있어 비번 변경만으론 불충분).</span></p>
       </Panel>
 
-      <Panel title="다크웹 인포스틸러 감염 (도메인 전수)" subtitle="악성코드 감염으로 탈취된 다크웹 스틸러 로그. 도메인 전체 집계." right={<span className="chip chip-neutral"><Bug size={13} className="mr-1 inline" aria-hidden /> 총 {infoTotal.toLocaleString()}건</span>}>
+      <Panel title="다크웹 인포스틸러 감염 (도메인 전수)" subtitle="악성코드 감염으로 탈취된 다크웹 스틸러 로그. 도메인 전체 집계." right={
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="chip chip-neutral"><Bug size={13} className="mr-1 inline" aria-hidden /> 총 {infoTotal.toLocaleString()}건</span>
+          <button onClick={() => exportInfostealerCsv(infostealer, hosts)} disabled={!infostealer.length} className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50" title="관제(SOC) 이관용 CSV 다운로드"><Download size={12} aria-hidden /> CSV</button>
+          <button onClick={() => exportInfostealerJson(infostealer, hosts)} disabled={!infostealer.length} className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50" title="관제(SOC) 이관용 JSON 다운로드"><Download size={12} aria-hidden /> JSON</button>
+        </div>
+      }>
         {infostealer.length === 0 ? (
           <p className="py-6 text-center text-sm text-muted">인포스틸러 데이터 없음.</p>
         ) : (
@@ -862,6 +918,13 @@ export default function DashboardClient() {
                         <span className="ml-1.5 font-mono text-[11px] text-muted">{i.domain}</span>
                       </div>
                       <span className="shrink-0 text-sm font-extrabold text-rose-700">{i.total.toLocaleString()}<span className="text-[11px] font-semibold">건</span></span>
+                    </div>
+                    {/* 타임라인: 언제 처음 잡혔고 언제 다시 확인됐는지 */}
+                    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-muted">
+                      <CalendarClock size={10} className="shrink-0 text-slate-400" aria-hidden />
+                      <span>최초 탐지 <b className="font-semibold text-slate-600">{i.firstSeenAt ? fmtDate(i.firstSeenAt) : "—"}</b></span>
+                      <span aria-hidden>·</span>
+                      <span>최근 점검 {fmtDate(i.scannedAt)}</span>
                     </div>
                     {/* 감염 유형 분포 막대 */}
                     <div className="mt-2 flex h-2 overflow-hidden rounded-full bg-slate-200">
@@ -934,6 +997,11 @@ export default function DashboardClient() {
                     {h.dateCompromised && (
                       <span className="inline-flex items-center gap-1 text-[11px] text-muted">
                         <CalendarClock size={11} aria-hidden /> 감염일 {h.dateCompromised}
+                      </span>
+                    )}
+                    {h.firstSeenAt && (
+                      <span className="inline-flex items-center gap-1 text-[11px] text-muted">
+                        <CalendarClock size={11} aria-hidden /> 최초 탐지 {fmtDate(h.firstSeenAt)}
                       </span>
                     )}
                   </div>
