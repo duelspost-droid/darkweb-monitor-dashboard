@@ -130,80 +130,145 @@ function RemediationControls({
   );
 }
 
+type Exp = { id: string; title: string; date: string; dataClasses: string[]; source: string; referenceUrl?: string };
+type Grp = { accountMasked: string; domain: string; isNew: boolean; hasStealer: boolean; severity: keyof typeof SEVERITY_META; sevRank: number; exposures: Exp[]; status: string; note?: string; by?: string; at?: string };
+
 function AccountGroupedFindings({ findings, onChanged }: { findings: GroupingFinding[]; onChanged: () => void }) {
-  if (!findings.length) {
-    return <p className="px-5 py-10 text-center text-muted">노출된 계정이 없습니다. 👍</p>;
-  }
-  type Exp = { id: string; title: string; date: string; dataClasses: string[]; source: string; referenceUrl?: string };
-  type Grp = { accountMasked: string; domain: string; isNew: boolean; hasStealer: boolean; severity: keyof typeof SEVERITY_META; sevRank: number; exposures: Exp[]; status: string; note?: string; by?: string; at?: string };
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"all" | "open" | "remediated" | "dismissed">("all");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState("");
+  const [bulkErr, setBulkErr] = useState("");
+
   const map = new Map<string, Grp>();
   for (const f of findings) {
     let g = map.get(f.accountMasked);
     if (!g) { g = { accountMasked: f.accountMasked, domain: f.domain, isNew: false, hasStealer: false, severity: f.severity, sevRank: -1, exposures: [], status: "open" }; map.set(f.accountMasked, g); }
-    // 조치 상태: 계정 단위로 동일하게 저장됨 — 비-open 값이 있으면 채택.
     if (f.status && f.status !== "open") { g.status = f.status; g.note = f.remediationNote; g.by = f.remediatedBy; g.at = f.remediatedAt; }
     else if (f.remediationNote && !g.note) { g.note = f.remediationNote; }
     if (f.isNew) g.isNew = true;
-    // 유출∩인포스틸러 교차: 이 계정에 인포스틸러 감염 노출이 같이 있으면 최우선.
     if (/Hudson Rock/i.test(f.source) || (f.dataClasses ?? []).includes("인포스틸러 감염")) g.hasStealer = true;
     const rank = SEVERITY_RANK[f.severity] ?? 0;
     if (rank > g.sevRank) { g.sevRank = rank; g.severity = f.severity; }
     g.exposures.push({ id: f.id, title: f.breachTitle, date: f.breachDate, dataClasses: f.dataClasses, source: f.source, referenceUrl: f.referenceUrl });
   }
   const groups = [...map.values()].sort((a, b) => {
-    if (a.hasStealer !== b.hasStealer) return a.hasStealer ? -1 : 1; // 유출+인포스틸러 동시 최상단
+    if (a.hasStealer !== b.hasStealer) return a.hasStealer ? -1 : 1;
     if (a.isNew !== b.isNew) return a.isNew ? -1 : 1;
     if (b.sevRank !== a.sevRank) return b.sevRank - a.sevRank;
     return b.exposures.length - a.exposures.length;
   });
   for (const g of groups) g.exposures.sort((x, y) => (y.date || "").localeCompare(x.date || ""));
 
+  const counts: Record<string, number> = { all: groups.length, open: 0, remediated: 0, dismissed: 0 };
+  for (const g of groups) counts[g.status] = (counts[g.status] ?? 0) + 1;
+
+  const q = query.trim().toLowerCase();
+  const filtered = groups.filter((g) =>
+    (statusFilter === "all" || (g.status || "open") === statusFilter) &&
+    (!q || g.accountMasked.toLowerCase().includes(q) || g.domain.toLowerCase().includes(q)),
+  );
+  const allSel = filtered.length > 0 && filtered.every((g) => selected.has(g.accountMasked));
+  const allExp = filtered.length > 0 && filtered.every((g) => expanded.has(g.accountMasked));
+  const toggleSel = (a: string) => setSelected((s) => { const n = new Set(s); if (n.has(a)) n.delete(a); else n.add(a); return n; });
+  const toggleExp = (a: string) => setExpanded((s) => { const n = new Set(s); if (n.has(a)) n.delete(a); else n.add(a); return n; });
+
+  async function bulkApply(status: string) {
+    if (!selected.size) return;
+    setBulkBusy(status); setBulkErr("");
+    try {
+      for (const acct of [...selected]) {
+        const { error } = await supabase.rpc("set_remediation", { p_account: acct, p_status: status, p_note: null });
+        if (error) throw new Error(error.message);
+      }
+      setSelected(new Set());
+      onChanged();
+    } catch (e) {
+      setBulkErr("일괄 저장 실패: " + ((e as Error)?.message ?? String(e)));
+    } finally {
+      setBulkBusy("");
+    }
+  }
+
+  if (!findings.length) return <p className="px-5 py-10 text-center text-muted">노출된 계정이 없습니다. 👍</p>;
+
+  const FILTERS: { key: "all" | "open" | "remediated" | "dismissed"; label: string }[] = [
+    { key: "all", label: "전체" }, { key: "open", label: "미조치" }, { key: "remediated", label: "조치완료" }, { key: "dismissed", label: "이상없음" },
+  ];
+
   return (
-    <div className="space-y-3 p-4">
-      {groups.map((g) => {
-        const sev = SEVERITY_META[g.severity];
-        return (
-          <div key={g.accountMasked} className={`overflow-hidden rounded-xl border bg-white ${g.hasStealer ? "border-rose-300 ring-1 ring-rose-200" : "border-slate-200"}`}>
-            <div className={`flex flex-wrap items-center justify-between gap-2 border-b px-4 py-2.5 ${g.hasStealer ? "border-rose-100 bg-rose-50" : "border-slate-100 bg-slate-50"}`}>
-              <span className="inline-flex flex-wrap items-center gap-1.5 break-all font-mono text-sm font-semibold text-ink">
-                {g.hasStealer && <span className="rounded-full bg-rose-600 px-1.5 py-0.5 text-[10px] font-bold text-white" title="유출 데이터와 인포스틸러 감염 로그에 모두 존재 — 최우선 대응">🔴 유출+인포스틸러</span>}
-                {g.isNew && <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">NEW</span>}
-                <AcctLabel accountMasked={g.accountMasked} domain={g.domain} />
-              </span>
-              <span className="inline-flex shrink-0 items-center gap-2">
-                <span className="text-[11px] text-muted">유출 {g.exposures.length}건</span>
-                <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-semibold ${sev.chip}`}>{sev.label}</span>
-              </span>
-            </div>
-            <ul>
-              {g.exposures.map((e) => (
-                <li key={e.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-slate-50 px-4 py-2 text-sm first:border-t-0">
-                  <span className="min-w-0 break-words font-medium text-slate-700">{e.title}</span>
-                  <span className="shrink-0 font-mono text-xs text-muted">{e.date || "—"}</span>
-                  <span className="flex flex-wrap gap-1">
-                    {e.dataClasses.slice(0, 4).map((dc) => (
-                      <span key={dc} className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[11px] text-slate-600">{dc}</span>
+    <div className="p-4">
+      <div className="sticky top-0 z-20 -mx-4 mb-2 flex flex-wrap items-center gap-2 border-b border-slate-100 bg-white/95 px-4 pb-2.5 pt-1 backdrop-blur">
+        <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="계정·도메인 검색" className="w-40 rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm outline-none focus:border-sky-400" />
+        <div className="inline-flex flex-wrap gap-1">
+          {FILTERS.map((f) => (
+            <button key={f.key} onClick={() => setStatusFilter(f.key)} className={`rounded-full border px-2.5 py-1 text-xs font-medium ${statusFilter === f.key ? "border-sky-400 bg-sky-100 text-sky-800" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"}`}>{f.label} {counts[f.key] ?? 0}</button>
+          ))}
+        </div>
+        <span className="ml-auto inline-flex items-center gap-1.5">
+          <button onClick={() => setSelected(allSel ? new Set() : new Set(filtered.map((g) => g.accountMasked)))} className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50">{allSel ? "선택해제" : "전체선택"}</button>
+          <button onClick={() => setExpanded(allExp ? new Set() : new Set(filtered.map((g) => g.accountMasked)))} className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50">{allExp ? "전체접기" : "전체펼치기"}</button>
+        </span>
+      </div>
+
+      {selected.size > 0 && (
+        <div className="sticky top-[46px] z-10 mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2">
+          <span className="text-xs font-semibold text-sky-800">{selected.size}개 선택 — 일괄조치:</span>
+          <button onClick={() => bulkApply("remediated")} disabled={!!bulkBusy} className="rounded-lg bg-teal-600 px-2.5 py-1 text-xs font-bold text-white hover:bg-teal-700 disabled:opacity-50">{bulkBusy === "remediated" ? "저장…" : "조치완료"}</button>
+          <button onClick={() => bulkApply("dismissed")} disabled={!!bulkBusy} className="rounded-lg bg-sky-600 px-2.5 py-1 text-xs font-bold text-white hover:bg-sky-700 disabled:opacity-50">{bulkBusy === "dismissed" ? "저장…" : "이상없음"}</button>
+          <button onClick={() => bulkApply("open")} disabled={!!bulkBusy} className="rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-100 disabled:opacity-50">{bulkBusy === "open" ? "저장…" : "미조치"}</button>
+          <button onClick={() => setSelected(new Set())} className="text-xs font-medium text-slate-500 hover:underline">해제</button>
+          {bulkErr && <span className="text-[11px] font-semibold text-rose-600">{bulkErr}</span>}
+        </div>
+      )}
+
+      <div className="space-y-2">
+        {filtered.map((g) => {
+          const sev = SEVERITY_META[g.severity];
+          const st = STATUS_META[g.status] ?? STATUS_META.open;
+          const isOpen = expanded.has(g.accountMasked);
+          const isSel = selected.has(g.accountMasked);
+          return (
+            <div key={g.accountMasked} className={`overflow-hidden rounded-xl border bg-white ${isSel ? "border-sky-400 ring-1 ring-sky-200" : g.hasStealer ? "border-rose-300" : "border-slate-200"}`}>
+              <div className={`flex items-center gap-2 px-3 py-2 ${g.hasStealer ? "bg-rose-50" : "bg-slate-50"}`}>
+                <input type="checkbox" checked={isSel} onChange={() => toggleSel(g.accountMasked)} className="h-4 w-4 shrink-0 cursor-pointer accent-sky-600" aria-label="계정 선택" />
+                <button onClick={() => toggleExp(g.accountMasked)} className="inline-flex min-w-0 flex-1 items-center gap-1.5 text-left">
+                  <span className="shrink-0 text-xs text-slate-400">{isOpen ? "▾" : "▸"}</span>
+                  <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5 break-all font-mono text-sm font-semibold text-ink">
+                    {g.hasStealer && <span className="rounded-full bg-rose-600 px-1.5 py-0.5 text-[10px] font-bold text-white" title="유출+인포스틸러 동시 — 최우선">🔴</span>}
+                    {g.isNew && <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">NEW</span>}
+                    <AcctLabel accountMasked={g.accountMasked} domain={g.domain} />
+                  </span>
+                </button>
+                <span className="inline-flex shrink-0 items-center gap-1.5">
+                  <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${st.cls}`}>{st.label}</span>
+                  <span className={`hidden items-center rounded-full border px-2 py-0.5 text-xs font-semibold sm:inline-flex ${sev.chip}`}>{sev.label}</span>
+                  <span className="text-[11px] text-muted">{g.exposures.length}건</span>
+                </span>
+              </div>
+              {isOpen && (
+                <>
+                  <ul>
+                    {g.exposures.map((e) => (
+                      <li key={e.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-slate-50 px-4 py-2 text-sm">
+                        <span className="min-w-0 break-words font-medium text-slate-700">{e.title}</span>
+                        <span className="shrink-0 font-mono text-xs text-muted">{e.date || "—"}</span>
+                        <span className="flex flex-wrap gap-1">
+                          {e.dataClasses.slice(0, 4).map((dc) => (<span key={dc} className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[11px] text-slate-600">{dc}</span>))}
+                        </span>
+                        <span className="ml-auto shrink-0 text-[11px] text-muted">{e.source}{e.referenceUrl && <a href={e.referenceUrl} target="_blank" rel="noreferrer" className="ml-1.5 font-semibold text-sky-600 hover:underline">↗</a>}</span>
+                      </li>
                     ))}
-                  </span>
-                  <span className="ml-auto shrink-0 text-[11px] text-muted">
-                    {e.source}
-                    {e.referenceUrl && <a href={e.referenceUrl} target="_blank" rel="noreferrer" className="ml-1.5 font-semibold text-sky-600 hover:underline">↗</a>}
-                  </span>
-                </li>
-              ))}
-            </ul>
-            <RemediationControls
-              account={g.accountMasked}
-              status={g.status}
-              note={g.note}
-              by={g.by}
-              at={g.at}
-              suggestion={suggestAction(g.hasStealer, new Set(g.exposures.flatMap((e) => e.dataClasses)))}
-              onChanged={onChanged}
-            />
-          </div>
-        );
-      })}
+                  </ul>
+                  <RemediationControls account={g.accountMasked} status={g.status} note={g.note} by={g.by} at={g.at} suggestion={suggestAction(g.hasStealer, new Set(g.exposures.flatMap((e) => e.dataClasses)))} onChanged={onChanged} />
+                </>
+              )}
+            </div>
+          );
+        })}
+        {filtered.length === 0 && <p className="py-8 text-center text-sm text-muted">조건에 맞는 계정이 없습니다.</p>}
+      </div>
     </div>
   );
 }
