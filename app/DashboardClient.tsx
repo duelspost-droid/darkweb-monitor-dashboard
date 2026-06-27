@@ -564,29 +564,50 @@ function RemediationLogPanel({ reloadKey }: { reloadKey: string }) {
       ) : rows.length === 0 ? (
         <p className="py-6 text-center text-sm text-muted">조치 이력이 없습니다.</p>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[640px] text-sm">
-            <thead>
-              <tr className="border-b border-slate-200 text-left text-xs font-semibold uppercase tracking-wide text-muted">
-                <th className="px-3 py-2">시각</th><th className="px-3 py-2">계정</th><th className="px-3 py-2">상태</th><th className="px-3 py-2">메모</th><th className="px-3 py-2">담당</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => {
-                const s = STATUS_META[r.status] ?? STATUS_META.open;
-                return (
-                  <tr key={r.id} className="border-b border-slate-100 align-top last:border-0">
-                    <td className="whitespace-nowrap px-3 py-2 font-mono text-[11px] text-muted">{fmtDate(r.created_at)}</td>
-                    <td className="break-all px-3 py-2 font-mono text-xs text-ink">{r.account_masked}</td>
-                    <td className="px-3 py-2"><span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${s.cls}`}>{s.label}</span></td>
-                    <td className="px-3 py-2 text-slate-700">{r.note || "—"}</td>
-                    <td className="px-3 py-2 text-[11px] text-muted">{r.actor}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        <>
+          {/* 데스크톱: 테이블 */}
+          <div className="hidden overflow-x-auto sm:block">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 text-left text-xs font-semibold uppercase tracking-wide text-muted">
+                  <th className="px-3 py-2">시각</th><th className="px-3 py-2">계정</th><th className="px-3 py-2">상태</th><th className="px-3 py-2">메모</th><th className="px-3 py-2">담당</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => {
+                  const s = STATUS_META[r.status] ?? STATUS_META.open;
+                  return (
+                    <tr key={r.id} className="border-b border-slate-100 align-top last:border-0">
+                      <td className="whitespace-nowrap px-3 py-2 font-mono text-[11px] text-muted">{fmtDate(r.created_at)}</td>
+                      <td className="break-all px-3 py-2 font-mono text-xs text-ink">{r.account_masked}</td>
+                      <td className="px-3 py-2"><span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${s.cls}`}>{s.label}</span></td>
+                      <td className="px-3 py-2 text-slate-700">{r.note || "—"}</td>
+                      <td className="px-3 py-2 text-[11px] text-muted">{r.actor}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {/* 모바일: 카드 */}
+          <ul className="space-y-2 sm:hidden">
+            {rows.map((r) => {
+              const s = STATUS_META[r.status] ?? STATUS_META.open;
+              return (
+                <li key={r.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="min-w-0 break-all font-mono text-xs text-ink">{r.account_masked}</span>
+                    <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${s.cls}`}>{s.label}</span>
+                  </div>
+                  {r.note && <p className="mt-1 text-[12px] leading-5 text-slate-700">{r.note}</p>}
+                  <div className="mt-1 flex flex-wrap items-center gap-x-2 text-[11px] text-muted">
+                    <span className="font-mono">{fmtDate(r.created_at)}</span><span aria-hidden>·</span><span className="break-all">{r.actor}</span>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </>
       )}
     </Panel>
   );
