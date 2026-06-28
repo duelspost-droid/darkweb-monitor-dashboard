@@ -225,11 +225,11 @@ function AccountGroupedFindings({ findings, onChanged }: { findings: GroupingFin
             <button onClick={() => { setTab("done"); setSelected(new Set()); }} className={`rounded-full border px-3 py-1 text-xs font-semibold ${!isPending ? "border-teal-300 bg-teal-100 text-teal-800" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"}`}>조치 완료 {doneCount}</button>
           </div>
           <span className="ml-auto inline-flex items-center gap-1.5">
-            {isPending && <button onClick={() => setSelected(allSel ? new Set() : new Set(filtered.map((g) => g.accountMasked)))} className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50">{allSel ? "선택해제" : "전체선택"}</button>}
+            <button onClick={() => setSelected(allSel ? new Set() : new Set(filtered.map((g) => g.accountMasked)))} className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50">{allSel ? "선택해제" : "전체선택"}</button>
             <button onClick={() => setExpanded(allExp ? new Set() : new Set(filtered.map((g) => g.accountMasked)))} className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50">{allExp ? "전체접기" : "전체펼치기"}</button>
           </span>
         </div>
-        {isPending && visibleSel.length > 0 && (
+        {visibleSel.length > 0 && (
           <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2">
             <span className="text-xs font-semibold text-sky-800">{visibleSel.length}개 선택 — 일괄조치:</span>
             <button onClick={() => bulkApply("remediated")} disabled={!!bulkBusy} className="rounded-lg bg-teal-600 px-2.5 py-1 text-xs font-bold text-white hover:bg-teal-700 disabled:opacity-50">{bulkBusy === "remediated" ? "저장…" : "조치완료"}</button>
@@ -250,7 +250,7 @@ function AccountGroupedFindings({ findings, onChanged }: { findings: GroupingFin
           return (
             <div key={g.accountMasked} className={`overflow-hidden rounded-xl border bg-white ${isSel ? "border-sky-400 ring-1 ring-sky-200" : g.hasStealer ? "border-rose-300" : "border-slate-200"}`}>
               <div className={`flex items-center gap-2 px-3 py-2 ${g.hasStealer && isPending ? "bg-rose-50" : "bg-slate-50"}`}>
-                {isPending && <input type="checkbox" checked={isSel} onChange={() => toggleSel(g.accountMasked)} className="h-4 w-4 shrink-0 cursor-pointer accent-sky-600" aria-label="계정 선택" />}
+                <input type="checkbox" checked={isSel} onChange={() => toggleSel(g.accountMasked)} className="h-4 w-4 shrink-0 cursor-pointer accent-sky-600" aria-label="계정 선택" />
                 <button onClick={() => toggleExp(g.accountMasked)} className="inline-flex min-w-0 flex-1 items-center gap-1.5 text-left">
                   <span className="shrink-0 text-xs text-slate-400">{isOpen ? "▾" : "▸"}</span>
                   <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5 break-all font-mono text-sm font-semibold text-ink">
