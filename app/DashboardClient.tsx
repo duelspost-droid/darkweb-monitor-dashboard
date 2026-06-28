@@ -136,7 +136,7 @@ type Grp = { accountMasked: string; domain: string; isNew: boolean; hasStealer: 
 
 function AccountGroupedFindings({ findings, onChanged }: { findings: GroupingFinding[]; onChanged: () => void }) {
   const [query, setQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"all" | "open" | "remediated" | "dismissed">("all");
+  const [tab, setTab] = useState<"pending" | "done">("pending");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState("");
@@ -177,7 +177,13 @@ function AccountGroupedFindings({ findings, onChanged }: { findings: GroupingFin
   const counts: Record<string, number> = { all: searchMatched.length, open: 0, remediated: 0, dismissed: 0 };
   for (const g of searchMatched) counts[g.status] = (counts[g.status] ?? 0) + 1;
 
-  const filtered = searchMatched.filter((g) => statusFilter === "all" || (g.status || "open") === statusFilter);
+  // 두 갈래: 조치 필요(open) 큐 ↔ 조치 완료(remediated·dismissed) 내역. 조치하면 자동으로 큐에서 빠져 내역으로.
+  const pendingCount = counts.open ?? 0;
+  const doneCount = (counts.remediated ?? 0) + (counts.dismissed ?? 0);
+  const isPending = tab === "pending";
+  const filtered = isPending
+    ? searchMatched.filter((g) => (g.status || "open") === "open")
+    : searchMatched.filter((g) => g.status === "remediated" || g.status === "dismissed");
   const allSel = filtered.length > 0 && filtered.every((g) => selected.has(g.accountMasked));
   const allExp = filtered.length > 0 && filtered.every((g) => expanded.has(g.accountMasked));
   const toggleSel = (a: string) => setSelected((s) => { const n = new Set(s); if (n.has(a)) n.delete(a); else n.add(a); return n; });
@@ -209,26 +215,21 @@ function AccountGroupedFindings({ findings, onChanged }: { findings: GroupingFin
 
   if (!findings.length) return <p className="px-5 py-10 text-center text-muted">노출된 계정이 없습니다. 👍</p>;
 
-  const FILTERS: { key: "all" | "open" | "remediated" | "dismissed"; label: string }[] = [
-    { key: "all", label: "전체" }, { key: "open", label: "미조치" }, { key: "remediated", label: "조치완료" }, { key: "dismissed", label: "이상없음" },
-  ];
-
   return (
     <div className="p-4">
       <div className="sticky top-0 z-20 -mx-4 mb-2 border-b border-slate-100 bg-white/95 px-4 pb-2.5 pt-1 backdrop-blur">
         <div className="flex flex-wrap items-center gap-2">
           <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="계정·도메인 검색" className="w-40 rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm outline-none focus:border-sky-400" />
-          <div className="inline-flex flex-wrap gap-1">
-            {FILTERS.map((f) => (
-              <button key={f.key} onClick={() => setStatusFilter(f.key)} className={`rounded-full border px-2.5 py-1 text-xs font-medium ${statusFilter === f.key ? "border-sky-400 bg-sky-100 text-sky-800" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"}`}>{f.label} {counts[f.key] ?? 0}</button>
-            ))}
+          <div className="inline-flex gap-1">
+            <button onClick={() => { setTab("pending"); setSelected(new Set()); }} className={`rounded-full border px-3 py-1 text-xs font-semibold ${isPending ? "border-rose-300 bg-rose-100 text-rose-800" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"}`}>조치 필요 {pendingCount}</button>
+            <button onClick={() => { setTab("done"); setSelected(new Set()); }} className={`rounded-full border px-3 py-1 text-xs font-semibold ${!isPending ? "border-teal-300 bg-teal-100 text-teal-800" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"}`}>조치 완료 {doneCount}</button>
           </div>
           <span className="ml-auto inline-flex items-center gap-1.5">
-            <button onClick={() => setSelected(allSel ? new Set() : new Set(filtered.map((g) => g.accountMasked)))} className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50">{allSel ? "선택해제" : "전체선택"}</button>
+            {isPending && <button onClick={() => setSelected(allSel ? new Set() : new Set(filtered.map((g) => g.accountMasked)))} className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50">{allSel ? "선택해제" : "전체선택"}</button>}
             <button onClick={() => setExpanded(allExp ? new Set() : new Set(filtered.map((g) => g.accountMasked)))} className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50">{allExp ? "전체접기" : "전체펼치기"}</button>
           </span>
         </div>
-        {visibleSel.length > 0 && (
+        {isPending && visibleSel.length > 0 && (
           <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2">
             <span className="text-xs font-semibold text-sky-800">{visibleSel.length}개 선택 — 일괄조치:</span>
             <button onClick={() => bulkApply("remediated")} disabled={!!bulkBusy} className="rounded-lg bg-teal-600 px-2.5 py-1 text-xs font-bold text-white hover:bg-teal-700 disabled:opacity-50">{bulkBusy === "remediated" ? "저장…" : "조치완료"}</button>
@@ -248,8 +249,8 @@ function AccountGroupedFindings({ findings, onChanged }: { findings: GroupingFin
           const isSel = selected.has(g.accountMasked);
           return (
             <div key={g.accountMasked} className={`overflow-hidden rounded-xl border bg-white ${isSel ? "border-sky-400 ring-1 ring-sky-200" : g.hasStealer ? "border-rose-300" : "border-slate-200"}`}>
-              <div className={`flex items-center gap-2 px-3 py-2 ${g.hasStealer ? "bg-rose-50" : "bg-slate-50"}`}>
-                <input type="checkbox" checked={isSel} onChange={() => toggleSel(g.accountMasked)} className="h-4 w-4 shrink-0 cursor-pointer accent-sky-600" aria-label="계정 선택" />
+              <div className={`flex items-center gap-2 px-3 py-2 ${g.hasStealer && isPending ? "bg-rose-50" : "bg-slate-50"}`}>
+                {isPending && <input type="checkbox" checked={isSel} onChange={() => toggleSel(g.accountMasked)} className="h-4 w-4 shrink-0 cursor-pointer accent-sky-600" aria-label="계정 선택" />}
                 <button onClick={() => toggleExp(g.accountMasked)} className="inline-flex min-w-0 flex-1 items-center gap-1.5 text-left">
                   <span className="shrink-0 text-xs text-slate-400">{isOpen ? "▾" : "▸"}</span>
                   <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5 break-all font-mono text-sm font-semibold text-ink">
@@ -259,6 +260,7 @@ function AccountGroupedFindings({ findings, onChanged }: { findings: GroupingFin
                   </span>
                 </button>
                 <span className="inline-flex shrink-0 items-center gap-1.5">
+                  {!isPending && g.note && <span className="hidden max-w-[180px] truncate text-[11px] text-muted md:inline" title={g.note}>📝 {g.note}</span>}
                   <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${st.cls}`}>{st.label}</span>
                   <span className={`hidden items-center rounded-full border px-2 py-0.5 text-xs font-semibold sm:inline-flex ${sev.chip}`}>{sev.label}</span>
                   <span className="text-[11px] text-muted">{g.exposures.length}건</span>
@@ -284,7 +286,7 @@ function AccountGroupedFindings({ findings, onChanged }: { findings: GroupingFin
             </div>
           );
         })}
-        {filtered.length === 0 && <p className="py-8 text-center text-sm text-muted">조건에 맞는 계정이 없습니다.</p>}
+        {filtered.length === 0 && <p className="py-8 text-center text-sm text-muted">{isPending ? (query ? "조건에 맞는 미조치 계정이 없습니다." : "조치 필요 계정이 없습니다. 모두 처리됨 👍") : "아직 조치한 계정이 없습니다."}</p>}
       </div>
     </div>
   );
@@ -608,7 +610,7 @@ function RemediationLogPanel({ reloadKey }: { reloadKey: string }) {
       });
   }, [reloadKey]);
   return (
-    <Panel title="조치 내역" subtitle="상태 변경·조치 메모 이력 (감사 로그)">
+    <Panel title="조치 변경 이력" subtitle="모든 상태 변경·메모 기록 (감사 로그 · 수정 불가)">
       {err ? (
         <p className="py-4 text-center text-sm text-rose-600">로그 조회 실패: {err}</p>
       ) : rows.length === 0 ? (
@@ -882,7 +884,7 @@ export default function DashboardClient() {
         </Panel>
       </section>
 
-      <Panel title="유출 계정 상세 (식별)" subtitle="계정별로 묶어 — 어느 유출사고에 언제 노출됐는지 식별 표시합니다." right={<span className="chip chip-neutral">총 {summary.total}건</span>} bodyClassName="p-0">
+      <Panel title="유출 계정 상세 (식별)" subtitle="조치 필요 ↔ 조치 완료 탭으로 관리 — 조치하면 자동으로 '조치 완료'로 이동, 거기서 다시 수정 가능." right={<span className="chip chip-neutral">총 {summary.total}건</span>} bodyClassName="p-0">
         <AccountGroupedFindings findings={scan.findings} onChanged={load} />
       </Panel>
 
