@@ -729,6 +729,16 @@ export default function DashboardClient() {
   if (!scan) return <p className="px-4 py-20 text-center text-sm text-muted">데이터 불러오는 중…</p>;
 
   const { summary } = scan;
+  // 계정 단위 조치 현황 — 상단 KPI 동기화(유출 계정 상세 탭과 동일 규칙: 그룹 status = 비-open finding 우선).
+  const acctStatus = new Map<string, string>();
+  for (const f of scan.findings) {
+    if (f.status && f.status !== "open") acctStatus.set(f.accountMasked, f.status);
+    else if (!acctStatus.has(f.accountMasked)) acctStatus.set(f.accountMasked, "open");
+  }
+  const acctTotal = acctStatus.size;
+  let acctOpen = 0;
+  for (const st of acctStatus.values()) if (st === "open") acctOpen++;
+  const acctDone = acctTotal - acctOpen;
   const severityItems = (Object.keys(SEVERITY_META) as BreachSeverity[])
     .map((sev) => ({
       label: SEVERITY_META[sev].label,
@@ -835,7 +845,7 @@ export default function DashboardClient() {
 
       <div className="stat-grid">
         <StatTile label="모니터링 도메인" value={scan.domains.length} unit="개" icon={<Globe size={18} />} accent="#3157a4" sub={scan.domains.join(", ") || "미설정"} />
-        <StatTile label="유출 노출 계정" value={summary.total} unit="건" icon={<ShieldAlert size={18} />} accent="#be123c" trend={{ label: summary.total > 0 ? "조치 필요" : "노출 없음", dir: summary.total > 0 ? "down" : "up" }} sub="식별 표시" />
+        <StatTile label="유출 노출 계정" value={acctTotal} unit="계정" icon={<ShieldAlert size={18} />} accent="#be123c" trend={{ label: acctOpen > 0 ? `조치 필요 ${acctOpen}` : "모두 조치됨", dir: acctOpen > 0 ? "down" : "up" }} sub={`조치완료 ${acctDone} · 노출 ${summary.total}건`} />
         <StatTile label="이번 스캔 신규" value={summary.newCount} unit="건" icon={<Sparkles size={18} />} accent="#b45309" trend={{ label: summary.newCount > 0 ? "신규 발견" : "변동 없음", dir: summary.newCount > 0 ? "down" : "neutral" }} sub="직전 대비" />
         <StatTile label="인포스틸러 감염" value={infoTotal} unit="건" icon={<Bug size={18} />} accent="#7f1d1d" trend={{ label: "도메인 전수", dir: infoTotal > 0 ? "down" : "up" }} sub="Cavalier" />
       </div>
