@@ -739,16 +739,25 @@ export default function DashboardClient() {
   let acctOpen = 0;
   for (const st of acctStatus.values()) if (st === "open") acctOpen++;
   const acctDone = acctTotal - acctOpen;
+  // 도메인·심각도 조치현황 집계 (계정 단위 — 개요/차트 동기화)
+  const acctDomain = new Map<string, string>();
+  for (const f of scan.findings) if (!acctDomain.has(f.accountMasked)) acctDomain.set(f.accountMasked, f.domain);
+  const domainRemed = new Map<string, { open: number; done: number }>();
+  for (const [acct, st] of acctStatus) {
+    const d = acctDomain.get(acct) ?? "";
+    const e = domainRemed.get(d) ?? { open: 0, done: 0 };
+    if (st === "open") e.open++; else e.done++;
+    domainRemed.set(d, e);
+  }
+  const openSev: Record<string, number> = { critical: 0, high: 0, medium: 0, low: 0 };
+  for (const f of scan.findings) if (acctStatus.get(f.accountMasked) === "open") openSev[f.severity] = (openSev[f.severity] ?? 0) + 1;
+  // 심각도 분포·도메인별 노출 = '조치 필요(미조치)' 기준 → 조치하면 줄어든다(동기화)
   const severityItems = (Object.keys(SEVERITY_META) as BreachSeverity[])
-    .map((sev) => ({
-      label: SEVERITY_META[sev].label,
-      value: summary.bySeverity[sev] ?? 0,
-      color: SEVERITY_META[sev].color,
-      display: String(summary.bySeverity[sev] ?? 0),
-    }))
+    .map((sev) => ({ label: SEVERITY_META[sev].label, value: openSev[sev] ?? 0, color: SEVERITY_META[sev].color, display: String(openSev[sev] ?? 0) }))
     .filter((it) => it.value > 0);
-  const domainItems = summary.byDomain
-    .map((d) => ({ label: d.domain, value: d.count, display: `${d.count}건` }))
+  const domainItems = [...domainRemed.entries()]
+    .map(([domain, r]) => ({ label: domain, value: r.open, display: `${r.open}계정` }))
+    .filter((it) => it.value > 0)
     .sort((a, b) => b.value - a.value);
   const historyRecent = [...scan.history].slice(-12).reverse();
   const infostealer = scan.infostealer ?? [];
@@ -767,10 +776,14 @@ export default function DashboardClient() {
   const overview = scan.domains
     .map((d) => {
       const inf = infoByDomain.get(d);
+      const rem = domainRemed.get(d) ?? { open: 0, done: 0 };
       return {
         domain: d,
         name: INSTITUTIONS[d] ?? d,
         breach: breachByDomain.get(d) ?? 0,
+        acctOpen: rem.open,
+        acctDone: rem.done,
+        acctTotal: rem.open + rem.done,
         infoTotal: inf?.total ?? 0,
         employees: inf?.employees ?? 0,
         users: inf?.users ?? 0,
@@ -853,8 +866,8 @@ export default function DashboardClient() {
       <Panel title="계열사별 위험 개요" subtitle="회사별 유출 계정 · 인포스틸러 감염 통합 현황" right={<span className="chip chip-neutral"><Globe size={13} className="mr-1 inline" aria-hidden /> {overview.length}개사</span>}>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {overview.map((o) => {
-            const dot = o.breach > 0 ? "bg-rose-500" : o.infoTotal > 100 ? "bg-rose-400" : o.infoTotal > 0 ? "bg-amber-500" : "bg-teal-500";
-            const risk = o.breach > 0 || o.infoTotal > 0;
+            const dot = o.acctOpen > 0 ? "bg-rose-500" : o.infoTotal > 100 ? "bg-rose-400" : o.infoTotal > 0 ? "bg-amber-500" : "bg-teal-500";
+            const risk = o.acctOpen > 0 || o.infoTotal > 0;
             return (
               <div key={o.domain} className={`rounded-xl border p-4 ${risk ? "border-rose-200 bg-rose-50/40" : "border-slate-200 bg-slate-50"}`}>
                 <div className="flex items-start justify-between gap-2">
@@ -866,7 +879,7 @@ export default function DashboardClient() {
                 </div>
                 <div className="mt-3 grid grid-cols-2 gap-2">
                   <div className="rounded-lg bg-white/70 p-2 text-center">
-                    <div className="text-lg font-extrabold text-rose-700">{o.breach}</div>
+                    <div className="text-lg font-extrabold text-rose-700">{o.acctTotal}</div>
                     <div className="text-[10px] text-muted">유출 계정</div>
                   </div>
                   <div className="rounded-lg bg-white/70 p-2 text-center">
@@ -874,9 +887,16 @@ export default function DashboardClient() {
                     <div className="text-[10px] text-muted">인포스틸러</div>
                   </div>
                 </div>
+                {o.acctTotal > 0 && (
+                  <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px]">
+                    <span className={o.acctOpen > 0 ? "font-semibold text-rose-700" : "text-muted"}>조치 필요 {o.acctOpen}</span>
+                    <span className="text-muted">·</span>
+                    <span className="text-teal-700">조치 완료 {o.acctDone}</span>
+                  </div>
+                )}
                 {o.infoTotal > 0 && (
-                  <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-muted">
-                    <span>임직원 {o.employees}</span><span>·</span><span>사용자 {o.users}</span><span>·</span><span>서드파티 {o.thirdParties}</span>
+                  <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-muted">
+                    <span>인포스틸러 — 임직원 {o.employees}</span><span>·</span><span>사용자 {o.users}</span><span>·</span><span>서드파티 {o.thirdParties}</span>
                   </div>
                 )}
               </div>
@@ -886,11 +906,11 @@ export default function DashboardClient() {
       </Panel>
 
       <section className="grid gap-4 lg:grid-cols-2">
-        <Panel title="심각도 분포" subtitle="노출 데이터 분류 기반 위험도">
-          {severityItems.length ? <BarList items={severityItems} unit="건" /> : <p className="py-6 text-center text-sm text-muted">노출 없음.</p>}
+        <Panel title="심각도 분포" subtitle="조치 필요(미조치) 기준 — 데이터 분류 위험도">
+          {severityItems.length ? <BarList items={severityItems} unit="건" /> : <p className="py-6 text-center text-sm text-muted">조치 필요 항목 없음 👍</p>}
         </Panel>
-        <Panel title="도메인별 노출 (계정 유출)" subtitle="모니터링 도메인별 건수">
-          {domainItems.length ? <BarList items={domainItems} /> : <p className="py-6 text-center text-sm text-muted">데이터 없음.</p>}
+        <Panel title="도메인별 노출 (계정 유출)" subtitle="도메인별 조치 필요 계정 수">
+          {domainItems.length ? <BarList items={domainItems} /> : <p className="py-6 text-center text-sm text-muted">조치 필요 계정 없음 👍</p>}
         </Panel>
       </section>
 
