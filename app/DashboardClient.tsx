@@ -479,7 +479,7 @@ function LoginGate({ onSignedIn }: { onSignedIn: () => void }) {
     <div className="flex min-h-[70vh] items-center justify-center px-4">
       <form onSubmit={submit} className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-7 shadow-xl">
         <div className="mb-5 flex items-center gap-2">
-          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-rose-600 text-white">
+          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-cyan-600 text-white">
             <Lock size={18} aria-hidden />
           </span>
           <div>
@@ -523,7 +523,7 @@ function LoginGate({ onSignedIn }: { onSignedIn: () => void }) {
         <button
           type="submit"
           disabled={busy}
-          className="w-full rounded-lg bg-rose-600 py-2.5 text-sm font-bold text-white transition hover:bg-rose-700 disabled:opacity-60"
+          className="w-full rounded-lg bg-cyan-700 py-2.5 text-sm font-bold text-white transition hover:bg-cyan-600 disabled:opacity-60"
         >
           {busy ? "확인 중…" : "로그인"}
         </button>
@@ -576,7 +576,7 @@ function SetPasswordPanel({ onDone, onCancel }: { onDone: () => void; onCancel?:
     <div className="flex min-h-[70vh] items-center justify-center px-4">
       <form onSubmit={submit} className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-7 shadow-xl">
         <div className="mb-5 flex items-center gap-2">
-          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-rose-600 text-white"><Lock size={18} aria-hidden /></span>
+          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-cyan-600 text-white"><Lock size={18} aria-hidden /></span>
           <div>
             <h1 className="text-lg font-bold text-ink">비밀번호 설정</h1>
             <p className="text-xs text-muted">관리자 계정의 새 비밀번호를 입력하세요</p>
@@ -587,7 +587,7 @@ function SetPasswordPanel({ onDone, onCancel }: { onDone: () => void; onCancel?:
         <label className="mb-1 block text-xs font-semibold text-muted">새 비밀번호 확인</label>
         <input type="password" autoComplete="new-password" required value={pw2} onChange={(e) => setPw2(e.target.value)} className="mb-4 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-rose-400" />
         {err && <p className="mb-3 text-xs font-semibold text-rose-600">{err}</p>}
-        <button type="submit" disabled={busy} className="w-full rounded-lg bg-rose-600 py-2.5 text-sm font-bold text-white transition hover:bg-rose-700 disabled:opacity-60">{busy ? "설정 중…" : "비밀번호 설정"}</button>
+        <button type="submit" disabled={busy} className="w-full rounded-lg bg-cyan-700 py-2.5 text-sm font-bold text-white transition hover:bg-cyan-600 disabled:opacity-60">{busy ? "설정 중…" : "비밀번호 설정"}</button>
         {onCancel && <button type="button" onClick={onCancel} className="mt-2 w-full rounded-lg border border-slate-300 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50">취소</button>}
       </form>
     </div>

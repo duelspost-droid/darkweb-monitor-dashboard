@@ -293,7 +293,7 @@ textarea {
 .border-slate-200 { border-color: rgba(255, 255, 255, 0.09) !important; }
 .border-slate-100 { border-color: rgba(255, 255, 255, 0.06) !important; }
 .border-slate-50 { border-color: rgba(255, 255, 255, 0.045) !important; }
-.focus\:border-rose-400:focus { border-color: rgba(251, 113, 133, 0.6) !important; }
+.focus\:border-rose-400:focus { border-color: rgba(34, 211, 238, 0.6) !important; }
 .focus\:border-sky-400:focus { border-color: rgba(34, 211, 238, 0.6) !important; }
 
 /* rose (danger / severity) */
