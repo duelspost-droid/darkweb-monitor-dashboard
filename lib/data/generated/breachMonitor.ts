@@ -2,7 +2,7 @@
 import type { BreachScan } from "@/lib/types/breachMonitor";
 
 export const breachScan: BreachScan = {
-  "generatedAt": "2026-06-29T11:38:02.589Z",
+  "generatedAt": "2026-06-29T11:53:38.901Z",
   "source": "Supabase",
   "status": "ok",
   "isDemo": false,
