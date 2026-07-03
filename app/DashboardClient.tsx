@@ -669,6 +669,78 @@ function RemediationLogPanel({ reloadKey }: { reloadKey: string }) {
   );
 }
 
+// 관리자 계정 관리 — admin_allowlist(대시보드 접근 권한) 추가/삭제. 승인 관리자만(RLS).
+function AdminAccountsPanel({ currentEmail }: { currentEmail: string }) {
+  const [rows, setRows] = useState<Array<{ email: string; note: string | null; created_at: string }>>([]);
+  const [email, setEmail] = useState("");
+  const [note, setNote] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(() => {
+    supabase.from("admin_allowlist").select("email,note,created_at").order("created_at").then(({ data, error }) => {
+      if (error) setErr(error.message);
+      else { setRows((data ?? []) as typeof rows); setErr(""); }
+    });
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  async function add() {
+    const e = email.trim().toLowerCase();
+    if (!/^\S+@\S+\.\S+$/.test(e)) { setErr("올바른 이메일 형식을 입력하세요."); return; }
+    setBusy(true); setErr("");
+    const { error } = await supabase.from("admin_allowlist").insert({ email: e, note: note.trim() || null });
+    setBusy(false);
+    if (error) setErr(error.code === "23505" ? "이미 등록된 관리자입니다." : "추가 실패: " + error.message);
+    else { setEmail(""); setNote(""); load(); }
+  }
+  async function remove(e: string) {
+    setErr("");
+    const { error } = await supabase.from("admin_allowlist").delete().eq("email", e);
+    if (error) setErr("삭제 실패: " + error.message); else load();
+  }
+
+  return (
+    <Panel title="관리자 계정 관리" subtitle="대시보드 접근 권한(allowlist) — 승인 관리자만 추가·삭제할 수 있습니다." right={<span className="chip chip-neutral">{rows.length}명</span>}>
+      <div className="mb-3 flex flex-wrap items-end gap-2">
+        <div className="min-w-0 flex-1">
+          <label className="mb-1 block text-xs font-semibold text-muted">이메일</label>
+          <input value={email} onChange={(e) => setEmail(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") add(); }} type="email" placeholder="name@jbfg.com" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-sky-400" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <label className="mb-1 block text-xs font-semibold text-muted">메모 (선택)</label>
+          <input value={note} onChange={(e) => setNote(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") add(); }} placeholder="예: 보안팀 김OO" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-sky-400" />
+        </div>
+        <button onClick={add} disabled={busy} className="rounded-lg bg-cyan-700 px-4 py-2 text-sm font-bold text-white transition hover:bg-cyan-600 disabled:opacity-60">{busy ? "추가…" : "추가"}</button>
+      </div>
+      {err && <p className="mb-2 text-xs font-semibold text-rose-600">{err}</p>}
+      <ul className="space-y-1.5">
+        {rows.map((r) => {
+          const isMe = r.email === currentEmail;
+          const isPrimary = r.email === adminEmail;
+          const locked = isMe || isPrimary;
+          return (
+            <li key={r.email} className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+              <span className="break-all font-mono text-sm text-ink">{r.email}</span>
+              {isMe && <span className="rounded-full border border-sky-300 bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold text-sky-700">나</span>}
+              {isPrimary && <span className="rounded-full border border-slate-300 px-1.5 py-0.5 text-[10px] font-semibold text-muted">기본</span>}
+              {r.note && <span className="text-xs text-muted">· {r.note}</span>}
+              <span className="ml-auto text-[11px] text-muted">{fmtDate(r.created_at)}</span>
+              {locked
+                ? <span className="text-[11px] text-muted">삭제 불가</span>
+                : <button onClick={() => remove(r.email)} className="rounded-lg border border-rose-300 px-2 py-1 text-xs font-semibold text-rose-600 hover:bg-rose-50">삭제</button>}
+            </li>
+          );
+        })}
+        {rows.length === 0 && !err && <li className="py-4 text-center text-sm text-muted">관리자 목록을 불러오는 중…</li>}
+      </ul>
+      <p className="mt-3 flex gap-2 border-t border-slate-100 pt-3 text-[11px] leading-5 text-amber-700">
+        <AlertTriangle size={13} className="mt-0.5 shrink-0" aria-hidden />
+        <span>이 목록은 <b>데이터 접근 권한(RLS)</b>만 부여합니다. 추가한 사람이 실제 로그인하려면 Supabase Auth에 해당 이메일 계정(초대/가입)이 별도로 있어야 합니다. 본인 계정·기본 관리자는 잠금 방지를 위해 삭제할 수 없습니다.</span>
+      </p>
+    </Panel>
+  );
+}
+
 export default function DashboardClient() {
   const [session, setSession] = useState<Session | null>(null);
   const [ready, setReady] = useState(false);
@@ -927,6 +999,8 @@ export default function DashboardClient() {
       </Panel>
 
       <RemediationLogPanel reloadKey={scan.findings.map((f) => `${f.id}:${f.status}:${f.remediatedAt}`).join("|")} />
+
+      <AdminAccountsPanel currentEmail={session?.user?.email ?? ""} />
 
       <Panel title="인포스틸러 점검이란?" subtitle="다크웹 정보탈취 악성코드(인포스틸러) 감염 점검의 개념과 방법">
         <div className="grid gap-4 text-sm leading-6 text-slate-700 lg:grid-cols-2">
