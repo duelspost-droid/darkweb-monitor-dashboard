@@ -1,6 +1,6 @@
 # 다크웹 유출 모니터링 대시보드 — 개발 핸드오프 (HANDOFF)
 
-**최종 갱신: 2026-06-25**
+**최종 갱신: 2026-07-03** (직전: 06-25) — 최신 작업은 맨 아래 **16. 세션 로그** 참조.
 
 > ⚠️ **공개 repo 커밋됨 — 시크릿 값 기재 금지(위치만)**
 > 이 문서는 Public 저장소(`duelspost-droid/darkweb-monitor-dashboard`)에 커밋된다. 비밀번호·API 키·Supabase `service_role`·anon JWT·`SCAN_SECRET`·DB 비밀번호 등 **실제 시크릿 값은 어떤 형태로도 기재하지 않는다.** 변수 이름과 보관 위치만 적고, 값이 필요한 자리는 `{URL}`, `{ANON}` 같은 플레이스홀더로 표기한다.
@@ -360,3 +360,45 @@ cd /Users/hk/darkweb-monitor-dashboard && npm run supabase:pull
 ```
 
 > 위 명령에 등장하는 Supabase URL/ref는 이미 공개된 식별자다. anon/`service_role` JWT, `SCAN_SECRET`, DB 비밀번호 등 **실제 시크릿 값은 명령·출력 어디에도 포함하지 않는다**(`{ANON}` 등 플레이스홀더만 사용).
+
+---
+
+## 16. 세션 로그 — 2026-07-03 (계정 상태 그룹핑 버그 수정)
+
+> 이 절은 세션마다 최신 작업·지시·결정을 누적 기록한다(다른 PC 이어작업용). 새 세션은 이 아래에 날짜 소제목으로 덧붙인다.
+
+### 사용자 지시(요지)
+- "오늘자 배치 신규 2건 어디?" → 로그인 확인 후 라이브 대시보드에서 위치 지목.
+- "이게 언제 발견된 건데 신규야?" → `is_new` 의미 규명.
+- "왜 이 2건이 처리완료로 됐어?" → 계정 상태 그룹핑 버그 진단.
+- "진행해" → DB로 확인 + 코드 패치.
+- "모든 작업·지시 md 저장, 다른 PC 이어작업, 지속 갱신." (이 절)
+- "크롬으로 네가 배포해." → 브라우저(GitHub 웹)로 main 커밋 → CI 배포.
+
+### DB 실측 확인 (Supabase SQL editor, `where is_new = true`)
+- 신규 2건 = `kw***@wooricap.com`(wooricap.com), 둘 다 출처 **XposedOrNot**, `discovered_at`=**2026-07-02 15:00 UTC**(=07-03 00:00 KST 자정 배치), **status=`open`(미조치)**:
+  - `Collection-1 유출 이력` (critical)
+  - `Alleged-SOCRadar 유출 이력` (low)
+- 즉 신규 2건은 미조치가 맞고, "처리완료"로 보인 건 카드 그룹핑 버그 때문(아래).
+
+### "신규(is_new)" 의미 — 오해 주의 (`supabase/functions/scan-breaches/index.ts:717-718`)
+- `is_new = !existingIds.has(finding_id)` → **finding_id가 DB에 처음 들어온 스캔에서만 true**. 유출 사건 발생일(2019/2021/2024)과 무관 = "우리 관측 최초 포착". 다음 스캔이 돌면 false로 자동 해제.
+- `finding_id = sha1(domain|account|breach_name[|source])`(`:533,:553`) → **소스만 새로 붙어도** 같은 유출이 신규로 집계될 수 있음. stale-delete 후 재등장도 신규로 뜸.
+- ⚠️ **`discovered_at` 신뢰 불가**: upsert가 `resolution=merge-duplicates`(`:574`)이고 payload에 `discovered_at`(`:736`)이 포함 → **매 스캔 모든 행의 discovered_at이 현재 스캔 시각으로 덮어써짐**. "최초 발견 시각"이 아니라 "마지막 스캔 시각". 진짜 신규 신호는 `is_new`뿐. (개선 대상)
+
+### 버그 진단 — 신규가 "조치 완료"에 흡수됨
+- 계정 카드 상태를 계정 단위로 뭉치는 규칙이 **"open이 아닌 finding이 하나라도 있으면 그 상태"**(비-open 우선)였음.
+- `kwang@wooricap.com`은 **2026-06-27 `이상없음`(dismissed) 처리 이력** 존재(`duels@jbfg.com`). 이후 07-02 신규 2건이 `open`으로 추가(적재 시 status 컬럼 미포함 → 신규=open 디폴트)됐으나, 카드 상태는 과거 `이상없음`이 이겨 **"조치 완료" 탭에 묶임** → 신규 open 2건이 "조치 필요" 큐에 안 뜸(맹점). 상단 KPI `모두 조치됨`도 거짓 안심.
+
+### 수정 — `open`(미조치) 우선 (`app/DashboardClient.tsx`)
+1. `Grp` 타입에 `hasOpen?`/`doneStatus?` 필드 추가.
+2. 그룹 상태 캡처: 비-open은 `g.doneStatus`에, open이면 `g.hasOpen=true`.
+3. 확정 루프: `g.status = g.hasOpen ? "open" : (g.doneStatus ?? "open")`.
+4. KPI `acctStatus` 집계도 동일 규칙(open 우선).
+- 효과: **처리 완료 계정에 신규 유출이 오면 자동으로 "조치 필요"로 재부상** + KPI 정정. `npm run typecheck` 통과.
+
+### 상태 / 다음 TODO
+- [x] 진단 DB 확인, 코드 패치, typecheck 통과.
+- [ ] **배포**(크롬으로 GitHub 웹 편집 → `app/DashboardClient.tsx` main 커밋 → CI 빌드 → Pages). ← 진행.
+- [ ] `discovered_at` **최초발견일 보존** 개선: Edge Function upsert에서 discovered_at을 신규 행만 세팅하고 기존 행은 보존(예: upsert payload에서 discovered_at 제외 + 신규 삽입 시에만 세팅, 또는 first_seen 별도 컬럼). is_new 기반 알림/타임라인 정확도용.
+
