@@ -132,7 +132,7 @@ function RemediationControls({
 }
 
 type Exp = { id: string; title: string; date: string; dataClasses: string[]; source: string; referenceUrl?: string };
-type Grp = { accountMasked: string; domain: string; isNew: boolean; hasStealer: boolean; severity: keyof typeof SEVERITY_META; sevRank: number; exposures: Exp[]; status: string; note?: string; by?: string; at?: string };
+type Grp = { accountMasked: string; domain: string; isNew: boolean; hasStealer: boolean; severity: keyof typeof SEVERITY_META; sevRank: number; exposures: Exp[]; status: string; note?: string; by?: string; at?: string; hasOpen?: boolean; doneStatus?: string };
 
 function AccountGroupedFindings({ findings, onChanged }: { findings: GroupingFinding[]; onChanged: () => void }) {
   const [query, setQuery] = useState("");
@@ -153,14 +153,18 @@ function AccountGroupedFindings({ findings, onChanged }: { findings: GroupingFin
   for (const f of findings) {
     let g = map.get(f.accountMasked);
     if (!g) { g = { accountMasked: f.accountMasked, domain: f.domain, isNew: false, hasStealer: false, severity: f.severity, sevRank: -1, exposures: [], status: "open" }; map.set(f.accountMasked, g); }
-    if (f.status && f.status !== "open") { g.status = f.status; g.note = f.remediationNote; g.by = f.remediatedBy; g.at = f.remediatedAt; }
-    else if (f.remediationNote && !g.note) { g.note = f.remediationNote; }
+    if (f.status && f.status !== "open") { g.doneStatus = f.status; g.note = f.remediationNote; g.by = f.remediatedBy; g.at = f.remediatedAt; }
+    else { g.hasOpen = true; if (f.remediationNote && !g.note) g.note = f.remediationNote; }
     if (f.isNew) g.isNew = true;
     if (/Hudson Rock/i.test(f.source) || (f.dataClasses ?? []).includes("인포스틸러 감염")) g.hasStealer = true;
     const rank = SEVERITY_RANK[f.severity] ?? 0;
     if (rank > g.sevRank) { g.sevRank = rank; g.severity = f.severity; }
     g.exposures.push({ id: f.id, title: f.breachTitle, date: f.breachDate, dataClasses: f.dataClasses, source: f.source, referenceUrl: f.referenceUrl });
   }
+  // 계정 상태 = open(미조치) 우선: 미처리 노출이 하나라도 있으면 '조치 필요'.
+  // 모두 처리된 경우에만 조치완료/이상없음으로 표기(메모·처리자는 처리 기록에서 보존).
+  // → 처리 완료된 계정에 신규 유출이 들어오면 자동으로 '조치 필요'로 재부상.
+  for (const g of map.values()) g.status = g.hasOpen ? "open" : (g.doneStatus ?? "open");
   const groups = [...map.values()].sort((a, b) => {
     if (a.hasStealer !== b.hasStealer) return a.hasStealer ? -1 : 1;
     if (a.isNew !== b.isNew) return a.isNew ? -1 : 1;
@@ -729,11 +733,15 @@ export default function DashboardClient() {
   if (!scan) return <p className="px-4 py-20 text-center text-sm text-muted">데이터 불러오는 중…</p>;
 
   const { summary } = scan;
-  // 계정 단위 조치 현황 — 상단 KPI 동기화(유출 계정 상세 탭과 동일 규칙: 그룹 status = 비-open finding 우선).
+  // 계정 단위 조치 현황 — 상단 KPI 동기화(유출 계정 상세 탭과 동일 규칙: open(미조치) 우선).
+  // 미처리 노출이 하나라도 있으면 계정=조치 필요 → 처리 완료 계정에 신규 유출이 오면 자동 재부상.
   const acctStatus = new Map<string, string>();
   for (const f of scan.findings) {
-    if (f.status && f.status !== "open") acctStatus.set(f.accountMasked, f.status);
-    else if (!acctStatus.has(f.accountMasked)) acctStatus.set(f.accountMasked, "open");
+    const st = f.status || "open";
+    const cur = acctStatus.get(f.accountMasked);
+    if (cur === "open") continue;                                // 이미 미조치면 유지
+    if (st === "open") acctStatus.set(f.accountMasked, "open");   // 미조치 하나라도 있으면 open
+    else if (cur === undefined) acctStatus.set(f.accountMasked, st);
   }
   const acctTotal = acctStatus.size;
   let acctOpen = 0;
