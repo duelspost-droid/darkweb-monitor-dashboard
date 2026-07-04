@@ -278,6 +278,7 @@ function makeFinding(domain, alias, breachName, meta, nowIso) {
   return {
     id: findingId(domain, alias, breachName),
     accountMasked: `${maskLocalPart(alias)}@${domain}`,
+    account: `${alias}@${domain}`, // 식별(full) — RLS(005 authenticated)로만 노출. Edge mkFinding 과 일치.
     domain,
     breachName,
     breachTitle: meta.title || breachName,
@@ -297,6 +298,7 @@ function makeRawFinding({ domain, alias, breachName, breachTitle, breachDate, da
   return {
     id: findingId(domain, aliasKey, idSeed ? `${breachName}|${idSeed}` : breachName),
     accountMasked: aliasKey === "*" ? `*@${domain}` : `${maskLocalPart(aliasKey)}@${domain}`,
+    account: aliasKey === "*" ? "" : `${aliasKey}@${domain}`, // 식별(full) — RLS(005)로만. Edge mkRawFinding 과 일치.
     domain,
     breachName,
     breachTitle: breachTitle || breachName,
@@ -562,6 +564,54 @@ async function collectGithub(domains, nowIso) {
   return { findings, used: true, count: findings.length };
 }
 
+// ── 공개 소스코드 수동 큐레이션 노출 → breach_findings ──────────────────────
+// data/security/source_code_exposures.json (자사 방어적 OSINT 로 확인한 GitHub 등 공개
+// 소스코드/코드검색 노출) 을 매 스캔 breach_findings 로 재적재한다. 이렇게 하면 큐레이션
+// 노출도 대시보드 조치추적(008)·알림·stale 관리 대상에 포함되어 "배치가 같이 참고"한다.
+// info(정보성)·reviewed(조치불요) 는 제외하고 실제 조치 대상만 적재. 민감값 미저장(포인터만).
+const SC_DATACLASS = {
+  email: ["임직원 이메일", "공개 코드 노출"],
+  content: ["웹콘텐츠 스크랩"],
+  config: ["내부 시스템 URL"],
+  domain: ["만료 도메인"],
+  vuln: ["웹취약점(XSS)"],
+  info: ["참고"],
+};
+const SC_BREACHNAME = {
+  email: "공개 소스코드 이메일 노출",
+  content: "공개 소스코드 콘텐츠 스크랩",
+  config: "공개 소스코드 내부 URL 노출",
+  domain: "만료 도메인 노출",
+  vuln: "웹취약점 (OpenBugBounty)",
+  info: "공개 소스코드 참고",
+};
+function curatedToFindings(items, scannedAt, nowIso) {
+  const findings = [];
+  for (const e of items) {
+    if (e?.status === "reviewed" || e?.severity === "info") continue; // 정보성·조치완료 제외
+    const alias = e.type === "email" ? String(e.subject || "").split("@")[0].trim() : "*";
+    const sev = ["low", "medium", "high", "critical"].includes(e.severity) ? e.severity : "medium";
+    findings.push(makeRawFinding({
+      domain: e.domain || "jbfg.com",
+      alias: alias || "*",
+      breachName: SC_BREACHNAME[e.type] || "공개 소스코드 노출",
+      // email 타입은 subject 가 전체 이메일 → 제목엔 레포만(전체 이메일 미저장 불변식). 전체값은 마스킹 account 로.
+      breachTitle: (e.type === "email" ? (e.repo || "공개 소스코드") : `${e.subject || ""}${e.repo ? ` · ${e.repo}` : ""}`).slice(0, 120),
+      breachDate: "", // 유출시점 미상 — discoveredAt 로 기록
+      dataClassesKo: SC_DATACLASS[e.type] || ["공개 코드 노출"],
+      severity: sev,
+      source: "공개 소스코드 점검 (수동 큐레이션)",
+      referenceUrl: e.url || "",
+    }, nowIso, `sc|${e.id}`));
+  }
+  return findings;
+}
+async function collectCuratedExposures(nowIso) {
+  const doc = await readJson(join(securityDir, "source_code_exposures.json"), null);
+  const items = Array.isArray(doc?.findings) ? doc.findings : [];
+  return curatedToFindings(items, doc?.scannedAt, nowIso);
+}
+
 // ── ProxyNova COMB 콤보리스트 검색 (무료 키리스, 합법 공개) ──────────────────
 // 다크웹 유통 콤보리스트에서 도메인 단위 노출 계정 열거(명부 불필요). 평문 비번 미저장(분류만).
 // API 가 substring 퍼지매칭이라 email 이 정확히 @domain 으로 끝나는지 가드 필수.
@@ -707,6 +757,7 @@ async function loadSupabase(scan) {
     const rows = scan.findings.map((f) => ({
       finding_id: f.id,
       account_masked: f.accountMasked,
+      account: f.account ?? null, // RLS(005 authenticated) 게이트 — Edge 와 동일 컬럼. merge-duplicates 라 미제공 시 기존값 보존.
       domain: f.domain,
       breach_name: f.breachName,
       breach_title: f.breachTitle,
@@ -897,6 +948,15 @@ async function main() {
           provenanceExtra.push({ name: "Hudson Rock Cavalier (COMB 계정 교차)", kind: "breach", endpoint: "cavalier.hudsonrock.com /search-by-email", count: cb.hosts.length, scannedAt: nowIso });
           infostealerHosts = [...infostealerHosts, ...cb.hosts];
         }
+      }
+    }
+    // 공개 소스코드 수동 큐레이션 노출 (data/security/source_code_exposures.json) → breach_findings
+    {
+      const sc = await collectCuratedExposures(nowIso);
+      if (sc.length) {
+        console.log(`[monitor] 공개 소스코드 큐레이션 노출 ${sc.length}건 적재`);
+        findings.push(...sc);
+        provenanceExtra.push({ name: "공개 소스코드 점검 (수동 큐레이션)", kind: "breach", endpoint: "data/security/source_code_exposures.json", count: sc.length, scannedAt: nowIso });
       }
     }
   }

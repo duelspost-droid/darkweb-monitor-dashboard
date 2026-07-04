@@ -425,6 +425,61 @@ async function collectGithub(domains: string[], nowIso: string): Promise<{ findi
   return { findings, used: true, count: findings.length };
 }
 
+// ── 공개 소스코드 수동 큐레이션 노출 → breach_findings ──────────────────────
+// 정본(single source of truth): 레포의 data/security/source_code_exposures.json.
+// Edge 는 단일파일 배포라 아래 CURATED_EXPOSURES 로 미러링한다(JSON 수정 시 함께 갱신 — 소량·저빈도).
+// 매 스캔 이 노출들을 breach_findings 로 재적재해 대시보드 조치추적(008)·알림·stale 관리에 포함.
+// info(정보성)·reviewed(조치불요) 는 제외하고 실제 조치 대상만 적재. 민감값 미저장(레포/URL 포인터만).
+const SC_DATACLASS: Record<string, string[]> = {
+  email: ["임직원 이메일", "공개 코드 노출"],
+  content: ["웹콘텐츠 스크랩"],
+  config: ["내부 시스템 URL"],
+  domain: ["만료 도메인"],
+  vuln: ["웹취약점(XSS)"],
+  info: ["참고"],
+};
+const SC_BREACHNAME: Record<string, string> = {
+  email: "공개 소스코드 이메일 노출",
+  content: "공개 소스코드 콘텐츠 스크랩",
+  config: "공개 소스코드 내부 URL 노출",
+  domain: "만료 도메인 노출",
+  vuln: "웹취약점 (OpenBugBounty)",
+  info: "공개 소스코드 참고",
+};
+interface CuratedExposure { id: string; type: string; severity: string; domain: string; subject: string; repo: string; url: string; status?: string }
+const CURATED_EXPOSURES: CuratedExposure[] = [
+  { id: "gh-hantj-kjbank", type: "email", severity: "medium", domain: "kjbank.com", subject: "hantj@kjbank.com", repo: "HanTJ/hwp-report-generator", url: "https://github.com/HanTJ/hwp-report-generator" },
+  { id: "gh-kjb736-kjbank", type: "email", severity: "medium", domain: "kjbank.com", subject: "KJB736@kjbank.com", repo: "nexteco/starbucks", url: "https://github.com/nexteco/starbucks" },
+  { id: "gh-sej-wooricap", type: "email", severity: "high", domain: "wooricap.com", subject: "sej@wooricap.com (+전화·이름)", repo: "DongwooChae/QuantifyPro", url: "https://github.com/DongwooChae/QuantifyPro" },
+  { id: "gh-ljj282-wooricap", type: "email", severity: "medium", domain: "wooricap.com", subject: "ljj282@wooricap.com", repo: "gohdong/image_test", url: "https://github.com/gohdong/image_test" },
+  { id: "gh-jbfin-scrape", type: "content", severity: "low", domain: "jbfg.com", subject: "JB 웹콘텐츠 대량 스크랩", repo: "Minhyuckleee/JB_fin", url: "https://github.com/Minhyuckleee/JB_fin" },
+  { id: "gh-compliance-sentinel", type: "challenge", severity: "info", domain: "jbfg.com", subject: "Fin:AI Challenge 참가작", repo: "yosyus-Yo/JB_Project-Compliance-Sentinel", url: "https://github.com/yosyus-Yo/JB_Project-Compliance-Sentinel", status: "reviewed" },
+  { id: "gh-expired-jbwooricap", type: "domain", severity: "low", domain: "wooricap.com", subject: "jb-wooricap.com (만료 도메인)", repo: "cirosantilli/expired-domain-names-by-day-2021", url: "https://github.com/cirosantilli/expired-domain-names-by-day-2021" },
+  { id: "gh-internal-urls", type: "config", severity: "low", domain: "kjbank.com", subject: "내부/뱅킹 시스템 URL 하드코딩(다수 레포)", repo: "여러 레포(scordi-front/StepGuide/TableClothCatalog 등)", url: "https://github.com/search?q=pib.kjbank.com+OR+emp.wooricap.com&type=code" },
+  { id: "obb-kjbank-xss", type: "vuln", severity: "high", domain: "kjbank.com", subject: "kjbank.co.kr XSS (OpenBugBounty)", repo: "OpenBugBounty OBB:256489", url: "https://www.openbugbounty.org/reports/256489/" },
+  { id: "gh-jbfg-org", type: "info", severity: "info", domain: "jbfg.com", subject: "github.com/JBFG (공개 조직)", repo: "JBFG", url: "https://github.com/JBFG" },
+];
+async function collectCuratedExposures(nowIso: string): Promise<{ findings: RawFinding[]; used: boolean; count: number }> {
+  const findings: RawFinding[] = [];
+  for (const e of CURATED_EXPOSURES) {
+    if (e.status === "reviewed" || e.severity === "info") continue; // 정보성·조치완료 제외
+    const alias = e.type === "email" ? String(e.subject || "").split("@")[0].trim() : "*";
+    const sev = ["low", "medium", "high", "critical"].includes(e.severity) ? e.severity : "medium";
+    findings.push(await mkRawFinding({
+      domain: e.domain || "jbfg.com",
+      alias: alias || "*",
+      breachName: SC_BREACHNAME[e.type] || "공개 소스코드 노출",
+      // email 타입은 subject 가 전체 이메일 → 제목엔 레포만(전체 이메일 미저장 불변식). 전체값은 RLS account 로.
+      breachTitle: (e.type === "email" ? (e.repo || "공개 소스코드") : `${e.subject || ""}${e.repo ? ` · ${e.repo}` : ""}`).slice(0, 120),
+      dataClassesKo: SC_DATACLASS[e.type] || ["공개 코드 노출"],
+      severity: sev,
+      source: "공개 소스코드 점검 (수동 큐레이션)",
+      referenceUrl: e.url || "",
+    }, nowIso, `sc|${e.id}`));
+  }
+  return { findings, used: true, count: findings.length };
+}
+
 // ── ProxyNova COMB 콤보리스트 검색 (무료 키리스, 합법 공개) → breach_findings ──
 // 다크웹 유통 콤보리스트(33억 email:password 컴파일)에서 도메인 단위로 노출 계정을 열거.
 // 명부(MONITORED_EMAILS) 없이도 우리 도메인 노출 계정을 찾는다. 평문 비번은 절대 저장 안 함(분류만).
@@ -705,6 +760,11 @@ Deno.serve(async (req) => {
         }
         infostealerHosts = [...infostealerHosts, ...cb.hosts]; // 유출∩인포스틸러 교차 호스트
       }
+    }
+    // 공개 소스코드 수동 큐레이션 노출 (data/security/source_code_exposures.json 미러) → breach_findings
+    {
+      const sc = await collectCuratedExposures(nowIso);
+      if (sc.count) { findings.push(...sc.findings); provenanceExtra.push({ name: "공개 소스코드 점검 (수동 큐레이션)", kind: "breach", endpoint: "data/security/source_code_exposures.json", count: sc.count, scannedAt: nowIso }); }
     }
     } catch (e) {
       note = (note ? note + " | " : "") + `보조 소스 일부 실패: ${(e as Error).message}`;
