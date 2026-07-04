@@ -26,6 +26,7 @@ import { StatTile } from "@/components/ui/StatTile";
 import { BarList } from "@/components/ui/BarList";
 import { supabase, supabaseConfigured, adminEmail } from "@/lib/supabase/browserClient";
 import type { BreachScan, BreachSeverity, InfostealerFinding, InfostealerHost } from "@/lib/types/breachMonitor";
+import sourceCodeExposures from "@/data/security/source_code_exposures.json";
 
 const SEVERITY_META: Record<BreachSeverity, { label: string; color: string; chip: string }> = {
   critical: { label: "심각", color: "#be123c", chip: "bg-rose-100 text-rose-700 border-rose-300" },
@@ -669,6 +670,53 @@ function RemediationLogPanel({ reloadKey }: { reloadKey: string }) {
   );
 }
 
+// 공개 소스코드 노출 (GitHub 등) — 자사 OSINT 결과 + 권고 조치. data/security/source_code_exposures.json 참조.
+const SC_TYPE: Record<string, { label: string; cls: string }> = {
+  email: { label: "직원 이메일", cls: "border-rose-300 bg-rose-100 text-rose-700" },
+  content: { label: "콘텐츠 스크랩", cls: "border-amber-300 bg-amber-100 text-amber-700" },
+  challenge: { label: "공모전", cls: "border-sky-300 bg-sky-100 text-sky-700" },
+  domain: { label: "만료 도메인", cls: "border-amber-300 bg-amber-100 text-amber-700" },
+  config: { label: "시스템 URL", cls: "border-slate-300 bg-slate-100 text-slate-600" },
+  vuln: { label: "웹취약점", cls: "border-rose-300 bg-rose-100 text-rose-700" },
+  info: { label: "참고", cls: "border-slate-300 bg-slate-100 text-slate-500" },
+};
+const SC_SEV: Record<string, { label: string; cls: string }> = {
+  high: { label: "높음", cls: "text-rose-700" },
+  medium: { label: "보통", cls: "text-amber-700" },
+  low: { label: "낮음", cls: "text-slate-500" },
+  info: { label: "정보", cls: "text-sky-700" },
+};
+type ScExposure = { id: string; type: string; severity: string; institution: string; domain: string; subject: string; repo: string; url: string; exposure: string; action: string; status: string };
+function SourceCodeExposurePanel() {
+  const data = sourceCodeExposures as { scannedAt: string; source: string; findings: ScExposure[] };
+  const findings = data.findings ?? [];
+  const openCount = findings.filter((f) => f.status === "open").length;
+  return (
+    <Panel title="공개 소스코드 노출 (GitHub)" subtitle="자사 도메인·계정이 공개 소스코드/코드검색에 노출된 건 + 권고 조치" right={<span className="chip chip-neutral">조치 필요 {openCount} / 총 {findings.length}</span>}>
+      <p className="mb-3 flex gap-2 text-[11px] leading-5 text-muted"><Info size={13} className="mt-0.5 shrink-0 text-sky-500" aria-hidden /><span>자사 방어적 OSINT(GitHub 코드검색 + 레포 딥다이브). 점검일 {data.scannedAt}. 실 시크릿(.env/키)은 미검출 — 직원 이메일 PII가 우선 조치 대상입니다.</span></p>
+      <ul className="space-y-2">
+        {findings.map((f) => {
+          const t = SC_TYPE[f.type] ?? SC_TYPE.config;
+          const s = SC_SEV[f.severity] ?? SC_SEV.low;
+          return (
+            <li key={f.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${t.cls}`}>{t.label}</span>
+                <span className="min-w-0 break-all font-mono text-sm font-semibold text-ink">{f.subject}</span>
+                <span className="text-[11px] text-muted">· {f.institution}</span>
+                <span className={`ml-auto text-[11px] font-semibold ${s.cls}`}>{s.label}{f.status === "reviewed" ? " · 확인됨" : ""}</span>
+              </div>
+              <p className="mt-1.5 text-[12px] leading-5 text-slate-700">{f.exposure}</p>
+              <a href={f.url} target="_blank" rel="noreferrer" className="mt-1.5 inline-flex items-center gap-1 break-all font-mono text-[11px] text-sky-600 hover:underline">{f.repo} <span aria-hidden>↗</span></a>
+              <p className="mt-1.5 flex gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] leading-5 text-amber-900"><ShieldCheck size={12} className="mt-0.5 shrink-0" aria-hidden /><span><b>권고 조치:</b> {f.action}</span></p>
+            </li>
+          );
+        })}
+      </ul>
+    </Panel>
+  );
+}
+
 // 관리자 계정 관리 — admin_allowlist(대시보드 접근 권한) 추가/삭제. 승인 관리자만(RLS).
 function AdminAccountsPanel({ currentEmail }: { currentEmail: string }) {
   const [rows, setRows] = useState<Array<{ email: string; note: string | null; created_at: string }>>([]);
@@ -999,6 +1047,8 @@ export default function DashboardClient() {
       </Panel>
 
       <RemediationLogPanel reloadKey={scan.findings.map((f) => `${f.id}:${f.status}:${f.remediatedAt}`).join("|")} />
+
+      <SourceCodeExposurePanel />
 
       <AdminAccountsPanel currentEmail={session?.user?.email ?? ""} />
 
