@@ -438,7 +438,7 @@ function classifyFinancialPii(text: string): { categories: string[]; count: numb
   add("운전면허번호", "high", countGated(/(?:license|운전면허|면허번호)["'\s:=]*\d{2}-?\d{2}-?\d{6}-?\d{2}\b/gi));
   // 은행계좌 — 키워드/은행명 게이팅 + 자릿수(10~14)
   { const re = /(?:계좌|account|입금|이체|국민은행|신한은행|우리은행|하나은행|농협|기업은행|전북은행|광주은행)["'\s:=]*(\d{2,6}[- ]?\d{2,6}[- ]?\d{1,6})\b/gi; let m: RegExpExecArray | null, n = 0;
-    while ((m = re.exec(t)) !== null) { const d = m[1].replace(/[- ]/g, ""); if (d.length >= 10 && d.length <= 14) n++; } add("은행계좌번호", "high", n); }
+    while ((m = re.exec(t)) !== null) { const d = m[1].replace(/[- ]/g, ""); if (d.length >= 10 && d.length <= 14 && !(d.length === 11 && /^01[016789]/.test(d))) n++; } add("은행계좌번호", "high", n); }
   // 휴대전화
   add("휴대전화번호", "medium", countGated(/\b01[016789][- ]?\d{3,4}[- ]?\d{4}\b/g));
   const categories = [...found.keys()];
