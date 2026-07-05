@@ -366,7 +366,9 @@ async function fetchScan(): Promise<BreachScan> {
   if (bf.error) throw bf.error;
   if (sr.error) throw sr.error;
   if (inf.error) throw inf.error;
-  // infostealer_hosts: 테이블 미생성/권한 오류 시 빈 배열(대시보드 중단 방지)
+  // infostealer_hosts: 테이블 미생성/권한 오류 시 빈 배열(대시보드 중단 방지).
+  // 단, 오류를 조용히 삼키면 스키마 미생성/RLS 오류와 '감염 호스트 0건'을 구분 못 하므로 경고로 남긴다.
+  if (hosts.error) console.warn("[fetchScan] infostealer_hosts 조회 오류 — 빈 목록으로 처리:", hosts.error.message);
 
   const findings = (bf.data ?? []).map((r) => ({
     id: r.finding_id,
@@ -750,15 +752,15 @@ function AdminAccountsPanel({ currentEmail }: { currentEmail: string }) {
   return (
     <Panel title="관리자 계정 관리" subtitle="대시보드 접근 권한(allowlist) — 승인 관리자만 추가·삭제할 수 있습니다." right={<span className="chip chip-neutral">{rows.length}명</span>}>
       <div className="mb-3 flex flex-wrap items-end gap-2">
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 basis-full sm:basis-0 sm:flex-1">
           <label className="mb-1 block text-xs font-semibold text-muted">이메일</label>
           <input value={email} onChange={(e) => setEmail(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") add(); }} type="email" placeholder="name@jbfg.com" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-sky-400" />
         </div>
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 basis-full sm:basis-0 sm:flex-1">
           <label className="mb-1 block text-xs font-semibold text-muted">메모 (선택)</label>
           <input value={note} onChange={(e) => setNote(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") add(); }} placeholder="예: 보안팀 김OO" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-sky-400" />
         </div>
-        <button onClick={add} disabled={busy} className="rounded-lg bg-cyan-700 px-4 py-2 text-sm font-bold text-white transition hover:bg-cyan-600 disabled:opacity-60">{busy ? "추가…" : "추가"}</button>
+        <button onClick={add} disabled={busy} className="w-full rounded-lg bg-cyan-700 px-4 py-2 text-sm font-bold text-white transition hover:bg-cyan-600 disabled:opacity-60 sm:w-auto">{busy ? "추가…" : "추가"}</button>
       </div>
       {err && <p className="mb-2 text-xs font-semibold text-rose-600">{err}</p>}
       <ul className="space-y-1.5">

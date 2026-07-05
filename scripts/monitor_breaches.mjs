@@ -115,11 +115,19 @@ function todayStamp() {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// fetch 타임아웃 래퍼 — 느린 외부 소스가 스캔을 무한정 묶지 않도록 AbortController 적용(기본 12s).
+// Edge Function(scan-breaches/index.ts)의 fetchT 와 동작 일치(Node/Edge 드리프트 해소).
+function fetchT(url, opts = {}, ms = 12000) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  return fetch(url, { ...opts, signal: ctrl.signal }).finally(() => clearTimeout(t));
+}
+
 // 견고한 JSON fetch: 429/5xx 는 Retry-After/지수 백오프로 재시도. 실패해도 throw 안 함.
 async function fetchJson(url, { headers = {}, method = "GET", body } = {}, { retries = 2, baseDelay = 800 } = {}) {
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      const res = await fetch(url, { method, headers: { "user-agent": USER_AGENT, ...headers }, body });
+      const res = await fetchT(url, { method, headers: { "user-agent": USER_AGENT, ...headers }, body });
       if ((res.status === 429 || res.status >= 500) && attempt < retries) {
         const ra = Number(res.headers.get("retry-after"));
         await sleep(ra ? ra * 1000 : baseDelay * (attempt + 1));
@@ -171,7 +179,7 @@ function koDataClasses(list) {
 async function hibpFetch(path) {
   // 도메인 전수 검색 대비: 429(레이트리밋)는 Retry-After 만큼 대기 후 재시도.
   for (let attempt = 0; attempt < 4; attempt++) {
-    const res = await fetch(`${HIBP_BASE}${path}`, {
+    const res = await fetchT(`${HIBP_BASE}${path}`, {
       headers: { "hibp-api-key": HIBP_API_KEY, "user-agent": USER_AGENT },
     });
     if (res.status === 404 || res.status === 204) return null; // 유출 없음
@@ -189,7 +197,7 @@ async function hibpFetch(path) {
 
 async function loadHibpCatalog() {
   try {
-    const res = await fetch(`${HIBP_BASE}/breaches`, { headers: { "user-agent": USER_AGENT } });
+    const res = await fetchT(`${HIBP_BASE}/breaches`, { headers: { "user-agent": USER_AGENT } });
     if (!res.ok) return new Map();
     const arr = await res.json();
     const map = new Map();
@@ -221,7 +229,7 @@ function buildFindingsFromDomainMap(domain, aliasMap, catalog, nowIso) {
 // 카탈로그: breachID → { title, date, dataClasses }
 async function loadXonCatalog() {
   try {
-    const res = await fetch(`${XON_BASE}/breaches`, { headers: { "user-agent": USER_AGENT } });
+    const res = await fetchT(`${XON_BASE}/breaches`, { headers: { "user-agent": USER_AGENT } });
     if (!res.ok) return new Map();
     const body = await res.json();
     const arr = Array.isArray(body) ? body : body.exposedBreaches ?? [];
@@ -242,7 +250,7 @@ async function loadXonCatalog() {
 // 계정 1건의 유출 사건명 배열 조회. 유출 없음/오류면 [].
 async function xonCheckEmail(email) {
   try {
-    const res = await fetch(`${XON_BASE}/check-email/${encodeURIComponent(email)}`, {
+    const res = await fetchT(`${XON_BASE}/check-email/${encodeURIComponent(email)}`, {
       headers: { "user-agent": USER_AGENT },
     });
     if (!res.ok) return [];
@@ -317,7 +325,7 @@ async function collectCavalier(domains, nowIso) {
   const out = [];
   for (const domain of domains) {
     try {
-      const res = await fetch(`${CAVALIER_BASE}/search-by-domain?domain=${encodeURIComponent(domain)}`, {
+      const res = await fetchT(`${CAVALIER_BASE}/search-by-domain?domain=${encodeURIComponent(domain)}`, {
         headers: { "user-agent": USER_AGENT },
       });
       if (!res.ok) continue;
@@ -770,7 +778,7 @@ async function loadSupabase(scan) {
       reference_url: f.referenceUrl || null,
     }));
     if (rows.length) {
-      const res = await fetch(`${url}/rest/v1/breach_findings?on_conflict=finding_id`, {
+      const res = await fetchT(`${url}/rest/v1/breach_findings?on_conflict=finding_id`, {
         method: "POST", headers: sbHeaders, body: JSON.stringify(rows),
       });
       if (res.ok) console.log(`[supabase] breach_findings upsert ${rows.length}행`);
@@ -788,7 +796,7 @@ async function loadSupabase(scan) {
       scanned_at: i.scannedAt,
     }));
     if (infRows.length) {
-      const res2 = await fetch(`${url}/rest/v1/infostealer_findings?on_conflict=domain`, {
+      const res2 = await fetchT(`${url}/rest/v1/infostealer_findings?on_conflict=domain`, {
         method: "POST", headers: sbHeaders, body: JSON.stringify(infRows),
       });
       if (res2.ok) console.log(`[supabase] infostealer_findings upsert ${infRows.length}행`);
@@ -804,7 +812,7 @@ async function loadSupabase(scan) {
       scanned_at: h.scannedAt,
     }));
     if (hostRows.length) {
-      const res3 = await fetch(`${url}/rest/v1/infostealer_hosts?on_conflict=host_id`, {
+      const res3 = await fetchT(`${url}/rest/v1/infostealer_hosts?on_conflict=host_id`, {
         method: "POST", headers: sbHeaders, body: JSON.stringify(hostRows),
       });
       if (res3.ok) console.log(`[supabase] infostealer_hosts upsert ${hostRows.length}행`);
