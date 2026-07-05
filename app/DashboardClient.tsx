@@ -18,6 +18,8 @@ import {
   ShieldAlert,
   ShieldCheck,
   Sparkles,
+  Settings,
+  X,
 } from "lucide-react";
 import type { Session } from "@supabase/supabase-js";
 import { PageHero } from "@/components/ui/PageHero";
@@ -798,6 +800,7 @@ export default function DashboardClient() {
   const [loadErr, setLoadErr] = useState("");
   const [mustSetPw, setMustSetPw] = useState(false); // 초대/재설정 링크로 진입 → 비번 설정 필요
   const [showSetPw, setShowSetPw] = useState(false); // 로그인 상태에서 수동 변경
+  const [showSettings, setShowSettings] = useState(false); // 설정 드로어(관리자 계정관리·조치 변경 이력)
 
   useEffect(() => {
     if (!supabaseConfigured) {
@@ -935,6 +938,13 @@ export default function DashboardClient() {
         </span>
         <div className="flex items-center gap-2">
           <button
+            onClick={() => setShowSettings(true)}
+            className="inline-flex items-center gap-1.5 rounded-full border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+            aria-label="설정 — 관리자 계정관리·조치 변경 이력"
+          >
+            <Settings size={12} aria-hidden /> 설정
+          </button>
+          <button
             onClick={() => setShowSetPw(true)}
             className="inline-flex items-center gap-1.5 rounded-full border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50"
           >
@@ -990,14 +1000,13 @@ export default function DashboardClient() {
         <StatTile label="모니터링 도메인" value={scan.domains.length} unit="개" icon={<Globe size={18} />} accent="#3157a4" sub={scan.domains.join(", ") || "미설정"} />
         <StatTile label="유출 노출 계정" value={acctTotal} unit="계정" icon={<ShieldAlert size={18} />} accent="#be123c" trend={{ label: acctOpen > 0 ? `조치 필요 ${acctOpen}` : "모두 조치됨", dir: acctOpen > 0 ? "down" : "up" }} sub={`조치완료 ${acctDone} · 노출 ${summary.total}건`} />
         <StatTile label="이번 스캔 신규" value={summary.newCount} unit="건" icon={<Sparkles size={18} />} accent="#b45309" trend={{ label: summary.newCount > 0 ? "신규 발견" : "변동 없음", dir: summary.newCount > 0 ? "down" : "neutral" }} sub="직전 대비" />
-        <StatTile label="인포스틸러 감염" value={infoTotal} unit="건" icon={<Bug size={18} />} accent="#7f1d1d" trend={{ label: "도메인 전수", dir: infoTotal > 0 ? "down" : "up" }} sub="Cavalier" />
       </div>
 
-      <Panel title="계열사별 위험 개요" subtitle="회사별 유출 계정 · 인포스틸러 감염 통합 현황" right={<span className="chip chip-neutral"><Globe size={13} className="mr-1 inline" aria-hidden /> {overview.length}개사</span>}>
+      <Panel title="계열사별 위험 개요" subtitle="회사별 유출 계정 현황" right={<span className="chip chip-neutral"><Globe size={13} className="mr-1 inline" aria-hidden /> {overview.length}개사</span>}>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {overview.map((o) => {
-            const dot = o.acctOpen > 0 ? "bg-rose-500" : o.infoTotal > 100 ? "bg-rose-400" : o.infoTotal > 0 ? "bg-amber-500" : "bg-teal-500";
-            const risk = o.acctOpen > 0 || o.infoTotal > 0;
+            const dot = o.acctOpen > 0 ? "bg-rose-500" : "bg-teal-500";
+            const risk = o.acctOpen > 0;
             return (
               <div key={o.domain} className={`rounded-xl border p-4 ${risk ? "border-rose-200 bg-rose-50/40" : "border-slate-200 bg-slate-50"}`}>
                 <div className="flex items-start justify-between gap-2">
@@ -1007,26 +1016,15 @@ export default function DashboardClient() {
                   </div>
                   <span className={`mt-1 inline-flex h-2.5 w-2.5 shrink-0 rounded-full ${dot}`} aria-hidden />
                 </div>
-                <div className="mt-3 grid grid-cols-2 gap-2">
-                  <div className="rounded-lg bg-white/70 p-2 text-center">
-                    <div className="text-lg font-extrabold text-rose-700">{o.acctTotal}</div>
-                    <div className="text-[10px] text-muted">유출 계정</div>
-                  </div>
-                  <div className="rounded-lg bg-white/70 p-2 text-center">
-                    <div className="text-lg font-extrabold text-slate-800">{o.infoTotal.toLocaleString()}</div>
-                    <div className="text-[10px] text-muted">인포스틸러</div>
-                  </div>
+                <div className="mt-3 rounded-lg bg-white/70 p-2 text-center">
+                  <div className="text-lg font-extrabold text-rose-700">{o.acctTotal}</div>
+                  <div className="text-[10px] text-muted">유출 계정</div>
                 </div>
                 {o.acctTotal > 0 && (
                   <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px]">
                     <span className={o.acctOpen > 0 ? "font-semibold text-rose-700" : "text-muted"}>조치 필요 {o.acctOpen}</span>
                     <span className="text-muted">·</span>
                     <span className="text-teal-700">조치 완료 {o.acctDone}</span>
-                  </div>
-                )}
-                {o.infoTotal > 0 && (
-                  <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-muted">
-                    <span>인포스틸러 — 임직원 {o.employees}</span><span>·</span><span>사용자 {o.users}</span><span>·</span><span>서드파티 {o.thirdParties}</span>
                   </div>
                 )}
               </div>
@@ -1048,11 +1046,7 @@ export default function DashboardClient() {
         <AccountGroupedFindings findings={scan.findings} onChanged={load} />
       </Panel>
 
-      <RemediationLogPanel reloadKey={scan.findings.map((f) => `${f.id}:${f.status}:${f.remediatedAt}`).join("|")} />
-
       <SourceCodeExposurePanel />
-
-      <AdminAccountsPanel currentEmail={session?.user?.email ?? ""} />
 
       {sources.length > 0 && (
         <Panel title="수집 출처" subtitle="어떤 인텔리전스 소스에서 언제 수집했는지 기록">
@@ -1338,6 +1332,22 @@ export default function DashboardClient() {
         <span aria-hidden>·</span>
         <span>관리자 인증(RLS) 전용 · 외부 공유 금지</span>
       </p>
+
+      {showSettings && (
+        <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-label="설정">
+          <div className="absolute inset-0 bg-black/50" onClick={() => setShowSettings(false)} aria-hidden />
+          <div className="relative flex h-full w-full max-w-2xl flex-col overflow-y-auto shadow-2xl" style={{ background: "var(--bg)" }}>
+            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-line px-5 py-4" style={{ background: "var(--bg)" }}>
+              <h2 className="flex items-center gap-2 text-lg font-bold text-ink"><Settings size={18} aria-hidden /> 설정</h2>
+              <button onClick={() => setShowSettings(false)} className="rounded-lg p-1.5 text-muted transition hover:bg-slate-100 hover:text-ink" aria-label="닫기"><X size={18} aria-hidden /></button>
+            </div>
+            <div className="space-y-6 p-5">
+              <AdminAccountsPanel currentEmail={session?.user?.email ?? ""} />
+              <RemediationLogPanel reloadKey={scan.findings.map((f) => `${f.id}:${f.status}:${f.remediatedAt}`).join("|")} />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
