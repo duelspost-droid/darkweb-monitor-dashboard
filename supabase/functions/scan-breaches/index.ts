@@ -388,6 +388,65 @@ async function collectLeakcheck(domains: string[], accounts: string[], nowIso: s
   return { findings: [], used: false, count: 0, mode: "" };
 }
 
+// ── 금융 고객 개인정보(PII) 노출 분류기 ───────────────────────────────────────
+// 공개 소스코드/유출 텍스트에서 CI·DI·주민번호·카드·계좌 등 '카테고리'만 탐지한다.
+// ⚠️ 실제 값은 절대 반환·저장·로그하지 않는다(PIPA·신용정보법·전자금융감독규정). 정규식 판정 후
+//    매칭 값은 즉시 폐기하고 카테고리·건수·최고심각도만 돌려준다(값은 이 함수 밖으로 안 나감).
+const PII_SEV_RANK: Record<string, number> = { low: 0, medium: 1, high: 2, critical: 3 };
+function luhnValid(digits: string): boolean {
+  let sum = 0, alt = false;
+  for (let i = digits.length - 1; i >= 0; i--) {
+    let d = digits.charCodeAt(i) - 48;
+    if (d < 0 || d > 9) return false;
+    if (alt) { d *= 2; if (d > 9) d -= 9; }
+    sum += d; alt = !alt;
+  }
+  return sum % 10 === 0;
+}
+function rrnValid(d13: string): boolean {
+  if (!/^\d{13}$/.test(d13)) return false;
+  const w = [2, 3, 4, 5, 6, 7, 8, 9, 2, 3, 4, 5];
+  let sum = 0;
+  for (let i = 0; i < 12; i++) sum += (d13.charCodeAt(i) - 48) * w[i];
+  return ((11 - (sum % 11)) % 10) === (d13.charCodeAt(12) - 48);
+}
+function classifyFinancialPii(text: string): { categories: string[]; count: number; maxSeverity: string | null } {
+  if (!text || typeof text !== "string") return { categories: [], count: 0, maxSeverity: null };
+  const t = text.length > 200000 ? text.slice(0, 200000) : text;
+  const found = new Map<string, { count: number; severity: string }>();
+  const add = (label: string, severity: string, n: number) => {
+    if (!n) return;
+    const e = found.get(label) || { count: 0, severity };
+    e.count += n;
+    if (PII_SEV_RANK[severity] > PII_SEV_RANK[e.severity]) e.severity = severity;
+    found.set(label, e);
+  };
+  const countGated = (re: RegExp) => { let n = 0; while (re.exec(t) !== null) n++; return n; };
+  // 주민등록번호/외국인등록번호 — 날짜검증 정규식 + 모듈러11 체크섬(자체검증)
+  { const re = /\b(\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01]))-?([1-8]\d{6})\b/g; let m: RegExpExecArray | null, n = 0;
+    while ((m = re.exec(t)) !== null) { if (rrnValid(m[1] + m[2])) n++; } add("주민등록번호/외국인등록번호", "critical", n); }
+  // 카드번호 — 16자리(구분자 허용) + Luhn(자체검증)
+  { const re = /\b(?:\d[ -]?){15}\d\b/g; let m: RegExpExecArray | null, n = 0;
+    while ((m = re.exec(t)) !== null) { const d = m[0].replace(/[ -]/g, ""); if (d.length === 16 && luhnValid(d)) n++; } add("신용/체크카드번호", "critical", n); }
+  // CI(연계정보) — 키워드 게이팅 + 88자 base64(== 패딩)
+  add("CI(연계정보)", "critical", countGated(/(?:\bci\b|unique_key|connecting_info(?:rmation)?|연계정보)["'\s]*[:=]["'\s]*[A-Za-z0-9+/]{86}==/gi));
+  // DI(중복가입확인정보) — 키워드 게이팅(길이 미확정→키워드 필수)
+  add("DI(중복가입확인정보)", "critical", countGated(/(?:\bdi\b|unique_in_site|dupinfo|duplicate_info|중복가입)["'\s]*[:=]["'\s]*[A-Za-z0-9+/]{64,86}={0,2}/gi));
+  // 여권 — 키워드 게이팅
+  add("여권번호", "high", countGated(/(?:passport|여권)["'\s:=]*[A-Za-z]\d{8}\b/gi));
+  // 운전면허 — 키워드 게이팅
+  add("운전면허번호", "high", countGated(/(?:license|운전면허|면허번호)["'\s:=]*\d{2}-?\d{2}-?\d{6}-?\d{2}\b/gi));
+  // 은행계좌 — 키워드/은행명 게이팅 + 자릿수(10~14)
+  { const re = /(?:계좌|account|입금|이체|국민은행|신한은행|우리은행|하나은행|농협|기업은행|전북은행|광주은행)["'\s:=]*(\d{2,6}[- ]?\d{2,6}[- ]?\d{1,6})\b/gi; let m: RegExpExecArray | null, n = 0;
+    while ((m = re.exec(t)) !== null) { const d = m[1].replace(/[- ]/g, ""); if (d.length >= 10 && d.length <= 14) n++; } add("은행계좌번호", "high", n); }
+  // 휴대전화
+  add("휴대전화번호", "medium", countGated(/\b01[016789][- ]?\d{3,4}[- ]?\d{4}\b/g));
+  const categories = [...found.keys()];
+  let maxSeverity: string | null = null, count = 0;
+  for (const [, e] of found) { count += e.count; if (!maxSeverity || PII_SEV_RANK[e.severity] > PII_SEV_RANK[maxSeverity]) maxSeverity = e.severity; }
+  return { categories, count, maxSeverity };
+}
+
 // ── GitHub 공개 노출 검색 (키-게이트, 무료 합법) → breach_findings ───────────
 async function collectGithub(domains: string[], nowIso: string): Promise<{ findings: RawFinding[]; used: boolean; count: number }> {
   if (!GITHUB_TOKEN) return { findings: [], used: false, count: 0 };
@@ -398,6 +457,8 @@ async function collectGithub(domains: string[], nowIso: string): Promise<{ findi
   };
   const findings: RawFinding[] = [];
   const seen = new Set<string>();
+  const PII_SCAN_LIMIT = 10; // 파일 내용 스캔 상한(Edge 실행시간·레이트 보호)
+  let scanned = 0;
   for (const domain of domains) {
     const q = encodeURIComponent(`"@${domain}" password`); // 이메일형(@도메인)으로 노이즈 축소
     const r = await fetchJson(`${GITHUB_API}/search/code?q=${q}&per_page=20`, { headers }, { retries: 1, baseDelay: 2000 });
@@ -419,6 +480,28 @@ async function collectGithub(domains: string[], nowIso: string): Promise<{ findi
         source: "공개 노출 (GitHub)",
         referenceUrl: url,
       }, nowIso, key));
+      // 파일 내용 스캔 → 금융 고객 PII 카테고리 탐지(값 미저장). 상한 내에서만.
+      if (scanned < PII_SCAN_LIMIT && it.url) {
+        scanned++;
+        try {
+          const rawRes = await fetchT(it.url, { headers: { ...headers, Accept: "application/vnd.github.raw" } }, 8000);
+          if (rawRes.ok) {
+            const pii = classifyFinancialPii(await rawRes.text());
+            if (pii.categories.length) {
+              findings.push(await mkRawFinding({
+                domain, alias: "*",
+                breachName: "고객 개인정보 노출 (GitHub)",
+                breachTitle: `${repo} · ${path}`.slice(0, 120),
+                dataClassesKo: pii.categories, // 카테고리만 — 실제 값 미포함
+                severity: pii.maxSeverity || "high",
+                source: "고객정보 노출 (GitHub)",
+                referenceUrl: url,
+              }, nowIso, `pii|${key}`));
+            }
+          }
+        } catch { /* 내용 스캔 실패는 무시(포인터 finding 은 유지) */ }
+        await sleep(300);
+      }
     }
     await sleep(1500); // 코드 검색 레이트리밋 배려(Edge 실행시간 한계 고려해 짧게)
   }
