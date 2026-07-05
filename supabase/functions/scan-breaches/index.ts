@@ -463,8 +463,10 @@ async function collectGithub(domains: string[], nowIso: string): Promise<{ findi
     { term: "password", dc: ["공개 코드 노출", "자격증명 의심"], useAt: true },
     { term: "주민번호", dc: ["공개 코드 노출", "개인정보 의심"], useAt: false },
     { term: "연계정보", dc: ["공개 코드 노출", "개인정보 의심"], useAt: false },
+    { term: "계좌번호", dc: ["공개 코드 노출", "개인정보 의심"], useAt: false },
+    { term: "여권번호", dc: ["공개 코드 노출", "개인정보 의심"], useAt: false },
   ];
-  const SEARCH_LIMIT = 9;    // 총 코드검색 호출 상한(Edge 실행시간·레이트 보호)
+  const SEARCH_LIMIT = 15;   // 총 코드검색 호출 상한(Edge 실행시간·레이트 보호; 상위 우선순위 커버)
   const PII_SCAN_LIMIT = 8;  // 파일 내용 스캔 상한(Edge 실행시간 보호)
   let searches = 0, scanned = 0;
   for (const gq of GH_QUERIES) {
@@ -514,7 +516,7 @@ async function collectGithub(domains: string[], nowIso: string): Promise<{ findi
           await sleep(300);
         }
       }
-      await sleep(1500); // 코드 검색 레이트리밋 배려(Edge 실행시간 한계 고려해 짧게)
+      await sleep(1000); // 코드 검색 레이트리밋 배려(Edge 실행시간 한계 고려 — 쿼리 늘어 축소)
     }
     if (searches >= SEARCH_LIMIT) break;
   }

@@ -612,8 +612,10 @@ async function collectGithub(domains, nowIso) {
     { term: "password", dc: ["공개 코드 노출", "자격증명 의심"], useAt: true },
     { term: "주민번호", dc: ["공개 코드 노출", "개인정보 의심"], useAt: false },
     { term: "연계정보", dc: ["공개 코드 노출", "개인정보 의심"], useAt: false },
+    { term: "계좌번호", dc: ["공개 코드 노출", "개인정보 의심"], useAt: false },
+    { term: "여권번호", dc: ["공개 코드 노출", "개인정보 의심"], useAt: false },
   ];
-  const SEARCH_LIMIT = 12;   // 총 코드검색 호출 상한(레이트 보호)
+  const SEARCH_LIMIT = 20;   // 5쿼리 × 4도메인 (로컬/CI 는 시간제한 없음)
   const PII_SCAN_LIMIT = 15; // 파일 내용 스캔 상한(시간 보호)
   let searches = 0, scanned = 0;
   for (const gq of GH_QUERIES) {

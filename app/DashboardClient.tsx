@@ -691,6 +691,47 @@ const SC_SEV: Record<string, { label: string; cls: string }> = {
   info: { label: "정보", cls: "text-sky-700" },
 };
 type ScExposure = { id: string; type: string; severity: string; institution: string; domain: string; subject: string; repo: string; url: string; exposure: string; action: string; status: string };
+// 고객 개인정보 노출 — 공개 소스코드 스캔에서 탐지된 CI/DI/주민번호/카드 등(실제 값 미저장, 유형·위치만).
+const PII_SEV_STYLE: Record<string, string> = {
+  critical: "border-rose-300 bg-rose-100 text-rose-700",
+  high: "border-amber-300 bg-amber-100 text-amber-700",
+  medium: "border-sky-300 bg-sky-100 text-sky-700",
+  low: "border-slate-300 bg-slate-100 text-slate-600",
+};
+type PiiFinding = { id: string; source: string; breachTitle: string; dataClasses: string[]; severity: string; referenceUrl?: string };
+function CustomerPiiPanel({ findings }: { findings: PiiFinding[] }) {
+  const pii = findings.filter((f) => f.source === "고객정보 노출 (GitHub)");
+  return (
+    <Panel
+      title="고객 개인정보 노출 (공개 소스코드)"
+      subtitle="공개 GitHub 코드에서 CI·DI·주민번호·카드 등 고객 개인정보가 탐지된 건 — 실제 값은 저장하지 않고 유형·위치만 기록"
+      right={pii.length
+        ? <span className="inline-flex items-center gap-1 rounded-full border border-rose-300 bg-rose-100 px-3 py-1 text-xs font-bold text-rose-700"><ShieldAlert size={13} aria-hidden /> {pii.length}건 · 즉시 조치</span>
+        : <span className="inline-flex items-center gap-1 rounded-full border border-teal-200 bg-teal-50 px-3 py-1 text-xs font-bold text-teal-700"><ShieldCheck size={13} aria-hidden /> 노출 없음</span>}
+    >
+      {pii.length === 0 ? (
+        <p className="flex items-center gap-2 py-3 text-sm text-muted"><ShieldCheck size={16} className="shrink-0 text-teal-600" aria-hidden /> 현재 공개 소스코드에서 탐지된 고객 개인정보 노출이 없습니다. 매 스캔 자동 점검합니다.</p>
+      ) : (
+        <ul className="space-y-2">
+          {pii.map((f) => (
+            <li key={f.id} className="rounded-xl border border-rose-300 bg-rose-50 p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${PII_SEV_STYLE[f.severity] ?? PII_SEV_STYLE.high}`}>{f.severity === "critical" ? "심각" : f.severity === "high" ? "높음" : f.severity}</span>
+                <span className="min-w-0 break-all font-mono text-sm font-semibold text-ink">{f.breachTitle}</span>
+                {f.referenceUrl ? <a href={f.referenceUrl} target="_blank" rel="noreferrer" className="ml-auto inline-flex shrink-0 items-center gap-1 font-mono text-[11px] text-sky-600 hover:underline">열기 <span aria-hidden>↗</span></a> : null}
+              </div>
+              <div className="mt-1.5 flex flex-wrap gap-1">
+                {f.dataClasses.map((c) => <span key={c} className="rounded-full border border-rose-200 bg-white/60 px-2 py-0.5 text-[11px] font-semibold text-rose-700">{c}</span>)}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="mt-3 flex gap-2 border-t border-slate-100 pt-3 text-[11px] leading-5 text-amber-700"><Info size={13} className="mt-0.5 shrink-0 text-sky-500" aria-hidden /><span>탐지 원칙: 실제 값(CI/DI/주민번호 등)은 저장·표시하지 않고 <b>유형·위치만</b> 기록(PIPA·전자금융감독규정). 발견 시 해당 레포 즉시 takedown + 유출 고객 통지·보호.</span></p>
+    </Panel>
+  );
+}
+
 function SourceCodeExposurePanel() {
   const data = sourceCodeExposures as { scannedAt: string; source: string; findings: ScExposure[] };
   const findings = data.findings ?? [];
@@ -1032,6 +1073,8 @@ export default function DashboardClient() {
           })}
         </div>
       </Panel>
+
+      <CustomerPiiPanel findings={scan.findings} />
 
       <section className="grid gap-4 lg:grid-cols-2">
         <Panel title="심각도 분포" subtitle="조치 필요(미조치) 기준 — 데이터 분류 위험도">
