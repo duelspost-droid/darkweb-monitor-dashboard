@@ -1054,7 +1054,63 @@ export default function DashboardClient() {
 
       <AdminAccountsPanel currentEmail={session?.user?.email ?? ""} />
 
-      <Panel title="인포스틸러 점검이란?" subtitle="다크웹 정보탈취 악성코드(인포스틸러) 감염 점검의 개념과 방법">
+      {sources.length > 0 && (
+        <Panel title="수집 출처" subtitle="어떤 인텔리전스 소스에서 언제 수집했는지 기록">
+          <div className="hidden overflow-x-auto sm:block">
+            <table className="w-full min-w-[560px] text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 text-left text-xs font-semibold uppercase tracking-wide text-muted">
+                  <th className="px-3 py-2">소스</th><th className="px-3 py-2">종류</th><th className="px-3 py-2">엔드포인트</th><th className="px-3 py-2">수집</th><th className="px-3 py-2">시각</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sources.map((s) => (
+                  <tr key={s.name} className="border-b border-slate-100 last:border-0">
+                    <td className="px-3 py-2 font-semibold text-ink"><Database size={13} className="mr-1 inline text-slate-400" aria-hidden />{s.name}</td>
+                    <td className="px-3 py-2"><span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${s.kind === "infostealer" ? "border-rose-300 bg-rose-100 text-rose-700" : "border-sky-300 bg-sky-100 text-sky-700"}`}>{s.kind === "infostealer" ? "인포스틸러" : "데이터 유출"}</span></td>
+                    <td className="px-3 py-2 font-mono text-[11px] text-muted">{s.endpoint}</td>
+                    <td className="px-3 py-2 text-slate-700">{s.count.toLocaleString()}</td>
+                    <td className="px-3 py-2 font-mono text-[11px] text-muted">{fmtDate(s.scannedAt)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {/* 모바일: 카드 */}
+          <div className="space-y-2 sm:hidden">
+            {sources.map((s) => (
+              <div key={s.name} className="rounded-lg border border-slate-100 bg-slate-50 p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-ink"><Database size={13} className="shrink-0 text-slate-400" aria-hidden />{s.name}</span>
+                  <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${s.kind === "infostealer" ? "border-rose-300 bg-rose-100 text-rose-700" : "border-sky-300 bg-sky-100 text-sky-700"}`}>{s.kind === "infostealer" ? "인포스틸러" : "데이터 유출"}</span>
+                </div>
+                <div className="mt-1 break-all font-mono text-[11px] text-muted">{s.endpoint}</div>
+                <div className="mt-1 text-[11px] text-muted">수집 {s.count.toLocaleString()}건 · {fmtDate(s.scannedAt)}</div>
+              </div>
+            ))}
+          </div>
+        </Panel>
+      )}
+
+      <Panel title="스캔 이력" subtitle="최근 스캔별 노출 건수 추이">
+        {historyRecent.length ? (
+          <ul className="grid gap-2 sm:grid-cols-2">
+            {historyRecent.map((h) => (
+              <li key={h.scannedAt} className="flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-sm">
+                <span className="font-mono text-xs text-muted">{fmtDate(h.scannedAt)}</span>
+                <span className="text-slate-700">총 <strong className="text-ink">{h.total}</strong>건
+                  {h.newCount > 0 && <span className="ml-2 rounded-full bg-amber-100 px-1.5 py-0.5 text-[11px] font-bold text-amber-700">신규 {h.newCount}</span>}
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : <p className="py-6 text-center text-sm text-muted">이력 없음.</p>}
+      </Panel>
+
+      {/* ── 참고 · 인포스틸러 (직접 침해 아닌 고객 단말 감염 중심 · 기본 접힘) ── */}
+      <div className="mt-2 flex items-center gap-2 px-1 text-xs font-bold uppercase tracking-wide text-muted"><Bug size={13} aria-hidden /> 참고 · 인포스틸러</div>
+
+      <Panel collapsible defaultCollapsed title="인포스틸러 점검이란?" subtitle="다크웹 정보탈취 악성코드(인포스틸러) 감염 점검의 개념과 방법">
         <div className="grid gap-4 text-sm leading-6 text-slate-700 lg:grid-cols-2">
           <div className="space-y-2.5">
             <p className="flex gap-2"><Bug size={16} className="mt-0.5 shrink-0 text-rose-600" aria-hidden /><span><strong>인포스틸러</strong>는 감염된 PC에서 브라우저에 저장된 비밀번호·쿠키·세션·자동완성·암호화폐 지갑 등을 통째로 탈취해 다크웹에 유통하는 악성코드입니다. 단순 유출과 달리 <strong>로그인 세션 탈취로 MFA(2단계 인증)까지 우회</strong>될 수 있어 위험합니다.</span></p>
@@ -1068,7 +1124,7 @@ export default function DashboardClient() {
         <p className="mt-3 flex gap-2 border-t border-slate-100 pt-3 text-xs text-amber-700"><AlertTriangle size={14} className="mt-0.5 shrink-0" aria-hidden /><span>감염 확인 시: 즉시 비밀번호 재설정 + MFA 재등록 + 해당 단말의 모든 활성 세션 무효화 + 단말 백신 정밀검사/포맷을 권고합니다(세션 쿠키까지 탈취됐을 수 있어 비번 변경만으론 불충분).</span></p>
       </Panel>
 
-      <Panel title="다크웹 인포스틸러 감염 (도메인 전수)" subtitle="악성코드 감염으로 탈취된 다크웹 스틸러 로그. 도메인 전체 집계." right={
+      <Panel collapsible defaultCollapsed title="다크웹 인포스틸러 감염 (도메인 전수)" subtitle="악성코드 감염으로 탈취된 다크웹 스틸러 로그. 도메인 전체 집계." right={
         <div className="flex flex-wrap items-center gap-2">
           <span className="chip chip-neutral"><Bug size={13} className="mr-1 inline" aria-hidden /> 총 {infoTotal.toLocaleString()}건</span>
           <button onClick={() => exportInfostealerCsv(infostealer, hosts)} disabled={!infostealer.length} className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50" title="관제(SOC) 이관용 CSV 다운로드"><Download size={12} aria-hidden /> CSV</button>
@@ -1162,7 +1218,7 @@ export default function DashboardClient() {
       </Panel>
 
       <Panel
-        title="감염 호스트 상세 (피해 단말)"
+        collapsible defaultCollapsed title="감염 호스트 상세 (피해 단말)"
         subtitle="모니터링 계정의 인포스틸러 감염 단말 — 민감정보, 관리자 전용·외부 공유 금지"
         right={<span className="chip chip-neutral"><Monitor size={13} className="mr-1 inline" aria-hidden /> {hosts.length}대 · 사내 {hostsCorpTotal}건</span>}
       >
@@ -1231,7 +1287,7 @@ export default function DashboardClient() {
         )}
       </Panel>
 
-      <Panel title="대응 가이드" subtitle="인포스틸러 감염 유형별 권고 조치 — 발견 시 이렇게 대응합니다">
+      <Panel collapsible defaultCollapsed title="대응 가이드" subtitle="인포스틸러 감염 유형별 권고 조치 — 발견 시 이렇게 대응합니다">
         <div className="space-y-3">
           <div className="rounded-xl border border-rose-200 bg-rose-50/50 p-4">
             <div className="flex flex-wrap items-center gap-2 text-sm font-bold text-rose-800">
@@ -1273,59 +1329,6 @@ export default function DashboardClient() {
           </div>
           <p className="flex gap-2 rounded-lg bg-slate-100 px-3 py-2 text-[12px] leading-5 text-slate-600"><Info size={14} className="mt-0.5 shrink-0 text-sky-600" aria-hidden /><span><strong>비번 변경만으론 부족한 이유</strong> — 인포스틸러는 <strong>세션 쿠키·토큰</strong>까지 탈취하므로 공격자는 비번 없이 기존 세션으로 로그인할 수 있습니다. 반드시 <strong>세션 무효화 + MFA</strong>를 병행하세요.</span></p>
         </div>
-      </Panel>
-
-      {sources.length > 0 && (
-        <Panel title="수집 출처" subtitle="어떤 인텔리전스 소스에서 언제 수집했는지 기록">
-          <div className="hidden overflow-x-auto sm:block">
-            <table className="w-full min-w-[560px] text-sm">
-              <thead>
-                <tr className="border-b border-slate-200 text-left text-xs font-semibold uppercase tracking-wide text-muted">
-                  <th className="px-3 py-2">소스</th><th className="px-3 py-2">종류</th><th className="px-3 py-2">엔드포인트</th><th className="px-3 py-2">수집</th><th className="px-3 py-2">시각</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sources.map((s) => (
-                  <tr key={s.name} className="border-b border-slate-100 last:border-0">
-                    <td className="px-3 py-2 font-semibold text-ink"><Database size={13} className="mr-1 inline text-slate-400" aria-hidden />{s.name}</td>
-                    <td className="px-3 py-2"><span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${s.kind === "infostealer" ? "border-rose-300 bg-rose-100 text-rose-700" : "border-sky-300 bg-sky-100 text-sky-700"}`}>{s.kind === "infostealer" ? "인포스틸러" : "데이터 유출"}</span></td>
-                    <td className="px-3 py-2 font-mono text-[11px] text-muted">{s.endpoint}</td>
-                    <td className="px-3 py-2 text-slate-700">{s.count.toLocaleString()}</td>
-                    <td className="px-3 py-2 font-mono text-[11px] text-muted">{fmtDate(s.scannedAt)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {/* 모바일: 카드 */}
-          <div className="space-y-2 sm:hidden">
-            {sources.map((s) => (
-              <div key={s.name} className="rounded-lg border border-slate-100 bg-slate-50 p-3">
-                <div className="flex items-start justify-between gap-2">
-                  <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-ink"><Database size={13} className="shrink-0 text-slate-400" aria-hidden />{s.name}</span>
-                  <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${s.kind === "infostealer" ? "border-rose-300 bg-rose-100 text-rose-700" : "border-sky-300 bg-sky-100 text-sky-700"}`}>{s.kind === "infostealer" ? "인포스틸러" : "데이터 유출"}</span>
-                </div>
-                <div className="mt-1 break-all font-mono text-[11px] text-muted">{s.endpoint}</div>
-                <div className="mt-1 text-[11px] text-muted">수집 {s.count.toLocaleString()}건 · {fmtDate(s.scannedAt)}</div>
-              </div>
-            ))}
-          </div>
-        </Panel>
-      )}
-
-      <Panel title="스캔 이력" subtitle="최근 스캔별 노출 건수 추이">
-        {historyRecent.length ? (
-          <ul className="grid gap-2 sm:grid-cols-2">
-            {historyRecent.map((h) => (
-              <li key={h.scannedAt} className="flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-sm">
-                <span className="font-mono text-xs text-muted">{fmtDate(h.scannedAt)}</span>
-                <span className="text-slate-700">총 <strong className="text-ink">{h.total}</strong>건
-                  {h.newCount > 0 && <span className="ml-2 rounded-full bg-amber-100 px-1.5 py-0.5 text-[11px] font-bold text-amber-700">신규 {h.newCount}</span>}
-                </span>
-              </li>
-            ))}
-          </ul>
-        ) : <p className="py-6 text-center text-sm text-muted">이력 없음.</p>}
       </Panel>
 
       <p className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 px-4 text-center text-[11px] leading-5 text-muted">
