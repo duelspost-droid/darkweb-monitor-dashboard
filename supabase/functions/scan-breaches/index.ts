@@ -457,53 +457,66 @@ async function collectGithub(domains: string[], nowIso: string): Promise<{ findi
   };
   const findings: RawFinding[] = [];
   const seen = new Set<string>();
-  const PII_SCAN_LIMIT = 10; // 파일 내용 스캔 상한(Edge 실행시간·레이트 보호)
-  let scanned = 0;
-  for (const domain of domains) {
-    const q = encodeURIComponent(`"@${domain}" password`); // 이메일형(@도메인)으로 노이즈 축소
-    const r = await fetchJson(`${GITHUB_API}/search/code?q=${q}&per_page=20`, { headers }, { retries: 1, baseDelay: 2000 });
-    // deno-lint-ignore no-explicit-any
-    const items: any[] = Array.isArray(r.data?.items) ? r.data.items : [];
-    for (const it of items) {
-      const repo = it.repository?.full_name || "";
-      const path = it.path || "";
-      const url = it.html_url || "";
-      const key = `${repo}/${path}`;
-      if (!repo || seen.has(key)) continue;
-      seen.add(key);
-      findings.push(await mkRawFinding({
-        domain, alias: "*",
-        breachName: "GitHub 공개 노출",
-        breachTitle: `${repo} · ${path}`.slice(0, 120),
-        dataClassesKo: ["공개 코드 노출", "자격증명 의심"],
-        severity: "high",
-        source: "공개 노출 (GitHub)",
-        referenceUrl: url,
-      }, nowIso, key));
-      // 파일 내용 스캔 → 금융 고객 PII 카테고리 탐지(값 미저장). 상한 내에서만.
-      if (scanned < PII_SCAN_LIMIT && it.url) {
-        scanned++;
-        try {
-          const rawRes = await fetchT(it.url, { headers: { ...headers, Accept: "application/vnd.github.raw" } }, 8000);
-          if (rawRes.ok) {
-            const pii = classifyFinancialPii(await rawRes.text());
-            if (pii.categories.length) {
-              findings.push(await mkRawFinding({
-                domain, alias: "*",
-                breachName: "고객 개인정보 노출 (GitHub)",
-                breachTitle: `${repo} · ${path}`.slice(0, 120),
-                dataClassesKo: pii.categories, // 카테고리만 — 실제 값 미포함
-                severity: pii.maxSeverity || "high",
-                source: "고객정보 노출 (GitHub)",
-                referenceUrl: url,
-              }, nowIso, `pii|${key}`));
+  // 검색 쿼리: 자격증명 + 개인정보(주민번호·연계정보) 맥락으로 확장. 검색은 넓게(재현율↑),
+  // 실제 PII 판정 정밀도는 파일 내용 분류기(classifyFinancialPii)가 담보한다.
+  const GH_QUERIES = [
+    { term: "password", dc: ["공개 코드 노출", "자격증명 의심"], useAt: true },
+    { term: "주민번호", dc: ["공개 코드 노출", "개인정보 의심"], useAt: false },
+    { term: "연계정보", dc: ["공개 코드 노출", "개인정보 의심"], useAt: false },
+  ];
+  const SEARCH_LIMIT = 9;    // 총 코드검색 호출 상한(Edge 실행시간·레이트 보호)
+  const PII_SCAN_LIMIT = 8;  // 파일 내용 스캔 상한(Edge 실행시간 보호)
+  let searches = 0, scanned = 0;
+  for (const gq of GH_QUERIES) {
+    for (const domain of domains) {
+      if (searches >= SEARCH_LIMIT) break;
+      searches++;
+      const q = encodeURIComponent(gq.useAt ? `"@${domain}" ${gq.term}` : `"${domain}" ${gq.term}`);
+      const r = await fetchJson(`${GITHUB_API}/search/code?q=${q}&per_page=15`, { headers }, { retries: 1, baseDelay: 2000 });
+      // deno-lint-ignore no-explicit-any
+      const items: any[] = Array.isArray(r.data?.items) ? r.data.items : [];
+      for (const it of items) {
+        const repo = it.repository?.full_name || "";
+        const path = it.path || "";
+        const url = it.html_url || "";
+        const key = `${repo}/${path}`;
+        if (!repo || seen.has(key)) continue;
+        seen.add(key);
+        findings.push(await mkRawFinding({
+          domain, alias: "*",
+          breachName: "GitHub 공개 노출",
+          breachTitle: `${repo} · ${path}`.slice(0, 120),
+          dataClassesKo: gq.dc,
+          severity: "high",
+          source: "공개 노출 (GitHub)",
+          referenceUrl: url,
+        }, nowIso, key));
+        // 파일 내용 스캔 → 금융 고객 PII 카테고리 탐지(값 미저장). 상한 내에서만.
+        if (scanned < PII_SCAN_LIMIT && it.url) {
+          scanned++;
+          try {
+            const rawRes = await fetchT(it.url, { headers: { ...headers, Accept: "application/vnd.github.raw" } }, 8000);
+            if (rawRes.ok) {
+              const pii = classifyFinancialPii(await rawRes.text());
+              if (pii.categories.length) {
+                findings.push(await mkRawFinding({
+                  domain, alias: "*",
+                  breachName: "고객 개인정보 노출 (GitHub)",
+                  breachTitle: `${repo} · ${path}`.slice(0, 120),
+                  dataClassesKo: pii.categories, // 카테고리만 — 실제 값 미포함
+                  severity: pii.maxSeverity || "high",
+                  source: "고객정보 노출 (GitHub)",
+                  referenceUrl: url,
+                }, nowIso, `pii|${key}`));
+              }
             }
-          }
-        } catch { /* 내용 스캔 실패는 무시(포인터 finding 은 유지) */ }
-        await sleep(300);
+          } catch { /* 내용 스캔 실패는 무시(포인터 finding 은 유지) */ }
+          await sleep(300);
+        }
       }
+      await sleep(1500); // 코드 검색 레이트리밋 배려(Edge 실행시간 한계 고려해 짧게)
     }
-    await sleep(1500); // 코드 검색 레이트리밋 배려(Edge 실행시간 한계 고려해 짧게)
+    if (searches >= SEARCH_LIMIT) break;
   }
   return { findings, used: true, count: findings.length };
 }
