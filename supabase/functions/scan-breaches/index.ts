@@ -112,13 +112,13 @@ async function maybeNotify(s: { status: string; newCount: number; total: number;
         headers: { "Authorization": `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
         body: JSON.stringify({ from: NOTIFY_EMAIL_FROM, to: [NOTIFY_EMAIL], subject: title, text }),
       }, 8000);
-    } catch (_e) { /* 알림 실패가 스캔을 죽이지 않게 무시 */ }
+    } catch (e) { console.warn("[notify] 이메일(Resend) 알림 전송 실패 — 스캔은 계속:", (e as Error).message); }
   }
   // 2) 웹훅 (Slack/Teams/일반)
   if (NOTIFY_WEBHOOK_URL) {
     try {
       await fetchT(NOTIFY_WEBHOOK_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) }, 8000);
-    } catch (_e) { /* 무시 */ }
+    } catch (e) { console.warn("[notify] 웹훅 알림 전송 실패 — 스캔은 계속:", (e as Error).message); }
   }
 }
 
@@ -164,7 +164,7 @@ async function loadXonCatalog(): Promise<Catalog> {
       };
     }
     return map;
-  } catch { return {}; }
+  } catch (e) { console.warn("[xon] 유출 카탈로그 로드 실패 — 제목/분류 메타 비어질 수 있음:", (e as Error).message); return {}; }
 }
 async function xonCheckEmail(email: string): Promise<string[]> {
   try {
@@ -186,7 +186,7 @@ async function loadHibpCatalog(): Promise<Catalog> {
     const map: Catalog = {};
     for (const b of arr) map[b.Name] = { title: b.Title ?? b.Name, date: isoDate(b.BreachDate), dataClasses: b.DataClasses ?? [] };
     return map;
-  } catch { return {}; }
+  } catch (e) { console.warn("[hibp] 유출 카탈로그 로드 실패 — 제목/분류 메타 비어질 수 있음:", (e as Error).message); return {}; }
 }
 async function hibpDomain(domain: string): Promise<Record<string, string[]> | null> {
   // 도메인 전수 검색 대비: 429 는 Retry-After 만큼 대기 후 재시도.
@@ -226,7 +226,7 @@ async function collectCavalier(domains: string[], nowIso: string): Promise<Infos
         third_parties: d.third_parties ?? 0, affected_urls: urls, scanned_at: nowIso,
       });
       await sleep(300);
-    } catch { /* skip domain */ }
+    } catch (e) { console.warn("[cavalier] 도메인 인포스틸러 조회 실패(건너뜀):", domain, (e as Error).message); }
   }
   return out;
 }
