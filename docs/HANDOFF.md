@@ -1,6 +1,6 @@
 # 다크웹 유출 모니터링 대시보드 — 개발 핸드오프 (HANDOFF)
 
-**최종 갱신: 2026-07-03** (직전: 06-25) — 최신 작업은 맨 아래 **16. 세션 로그** 참조.
+**최종 갱신: 2026-07-06** (직전: 07-03) — 최신 작업은 맨 아래 **17. 세션 로그** 참조.
 
 > ⚠️ **공개 repo 커밋됨 — 시크릿 값 기재 금지(위치만)**
 > 이 문서는 Public 저장소(`duelspost-droid/darkweb-monitor-dashboard`)에 커밋된다. 비밀번호·API 키·Supabase `service_role`·anon JWT·`SCAN_SECRET`·DB 비밀번호 등 **실제 시크릿 값은 어떤 형태로도 기재하지 않는다.** 변수 이름과 보관 위치만 적고, 값이 필요한 자리는 `{URL}`, `{ANON}` 같은 플레이스홀더로 표기한다.
@@ -399,6 +399,66 @@ cd /Users/hk/darkweb-monitor-dashboard && npm run supabase:pull
 
 ### 상태 / 다음 TODO
 - [x] 진단 DB 확인, 코드 패치, typecheck 통과.
-- [ ] **배포**(크롬으로 GitHub 웹 편집 → `app/DashboardClient.tsx` main 커밋 → CI 빌드 → Pages). ← 진행.
+- [x] **배포 완료**(크롬으로 GitHub 웹 편집 → `app/DashboardClient.tsx` main 커밋 `c40093f` → CI #59 성공 → 라이브 검증: 조치 필요 2 재부상).
 - [ ] `discovered_at` **최초발견일 보존** 개선: Edge Function upsert에서 discovered_at을 신규 행만 세팅하고 기존 행은 보존(예: upsert payload에서 discovered_at 제외 + 신규 삽입 시에만 세팅, 또는 first_seen 별도 컬럼). is_new 기반 알림/타임라인 정확도용.
 
+---
+
+## 17. 세션 로그 — 2026-07-06 (다중 사용자 로그인 + 슈퍼관리자 사용자 관리)
+
+> 이 절은 세션마다 최신 작업·지시·결정을 누적 기록한다(다른 PC 이어작업용). [[16. 세션 로그]] 다음 세션.
+
+### 사용자 지시(요지)
+- "로그인 계정 추가할 수 있게 만들어. 신청하면 내가 승인하게 해줘도 되고. 내가 슈퍼관리자고 일반 계정이 되겠지?" → 역할모델 확정: **슈퍼관리자**(승인·전체 관리) / **일반**(승인 후 열람+조치).
+  - 확인 질문 응답: 일반 계정 권한 = **열람+조치**(조치 상태 변경 가능), 가입 방식 = **셀프 신청(회원가입)+이메일 인증** 후 슈퍼관리자 승인.
+- "관리자페이지에서 사용자 직접 계정생성 및 패스워드 초기화, 패스워드 지정을 할수 있게 만들어" (2회 반복) → 슈퍼관리자가 UI에서 계정을 직접 만들고 비밀번호를 지정/초기화할 수 있는 기능 추가.
+
+### 아키텍처 결정 — 왜 Edge Function이 필요한가
+계정 생성·비밀번호 지정/삭제는 Supabase **Admin API**(`service_role`) 권한이 필요하다. `service_role` 키는 **브라우저에 절대 노출 불가**(모든 RLS 우회) → 반드시 **서버(Edge Function)**에서만 실행. 그래서 새 Edge Function **`admin-users`**를 만들어 service_role은 그 안에만 두고, 브라우저는 자기 JWT로 그 함수를 호출하는 구조로 설계.
+
+### DB — 마이그레이션 `009_user_management.sql` (적용 완료 · SQL Editor 실행 성공)
+- `app_users` 테이블: `id`(auth.users FK) · `email` · `role`(`super_admin`|`general`) · `status`(`pending`|`approved`|`rejected`|`suspended`) · `requested_at`/`decided_at`/`decided_by`/`note`.
+- 트리거 `on_auth_user_created` → 신규 `auth.users` 가입 시 `app_users` 행 자동 생성(기본 `pending`/`general`).
+- 헬퍼 `is_approved_user()`/`is_super_admin()` — `SECURITY DEFINER`로 `app_users` 자체 RLS 재귀 없이 판정.
+- RPC `set_user_status(p_user,p_status,p_note)` / `set_user_role(p_user,p_role)` — **슈퍼관리자 전용**(본인 상태/역할 변경 차단, 자가 잠금 방지).
+- **RLS 강화(핵심)**: `breach_findings`/`scan_runs`/`infostealer_findings`/`infostealer_hosts`/`remediation_log`의 SELECT 정책을 기존 `authenticated USING(true)` → **`USING (is_approved_user())`** 로 교체. 로그인만 해선 데이터를 못 보고, **승인까지 돼야** 조회 가능.
+- `set_remediation()`(008) 재정의 — 맨 앞에 `is_approved_user()` 가드 추가(미승인 사용자 조치 차단).
+- **시드**: 기존 `auth.users`를 전부 `app_users`(pending)로 백필 + `duels@jbfg.com`을 `super_admin`/`approved`로 승격. **실행 후 DB 쿼리로 확인함**: `total=1, super_admins=1, approved=1` → 잠금 위험 없음 확정.
+
+### Edge Function `admin-users` (배포 완료 · verify_jwt 설정까지 확인)
+- `supabase/functions/admin-users/index.ts`. 액션 3종, 전부 POST body `{action, ...}`:
+  - `create_user` — `{email,password,role}` → `admin.auth.admin.createUser({email,password,email_confirm:true})` 후 `app_users`를 `approved`+지정 역할로 갱신(신청 절차 생략, 즉시 사용 가능).
+  - `set_password` — `{user_id,password}` → `admin.auth.admin.updateUserById(userId,{password})`. 본인 대상 차단(본인은 "비밀번호 변경" 별도 플로우 사용).
+  - `delete_user` — `{user_id}` → `admin.auth.admin.deleteUser(userId)` (app_users는 `ON DELETE CASCADE`로 같이 삭제). 본인 대상 차단.
+- **인증 로직(함수 내부, verify_jwt=false로 우회 후 직접 검증)**: ① 호출자 Bearer JWT로 `getUser()` → 신원 확인 ② `service_role`로 `app_users`에서 `role=super_admin && status=approved` 확인 ③ 통과해야만 Admin API 실행. 셋 다 실패하면 401/403.
+- 비밀번호 최소 8자, 이메일 정규식 검증. `service_role` 값은 응답에 절대 미포함.
+- **배포 방식**: Supabase 대시보드 "Deploy a new function → Via Editor"로 Monaco에 코드 주입 → 배포 성공 확인. 배포 직후 **Settings → "Verify JWT with legacy secret"를 OFF로 변경**(프리플라이트 허용 + 함수 자체 인증 로직 사용, 권장 설정과 일치) — 토글 끄고 저장 완료.
+
+### 클라이언트 UI (`app/DashboardClient.tsx`, 배포 완료 · 커밋 `2c9ed24`)
+- **로그인 화면 확장**: `LoginGate`에 `mode: "login"|"signup"` 추가. "계정이 없으신가요? 계정 신청" 링크 → 이메일+비밀번호+확인 폼 → `supabase.auth.signUp()`. 성공 시 "이메일 인증 + 슈퍼관리자 승인 대기" 안내.
+- **승인 게이트**: `AppUser` 타입 + `PendingGate` 컴포넌트 — 로그인은 됐지만 `app_users.status !== "approved"`이면 상태별 안내(대기중/거부됨/정지됨) 화면 표시, 로그인 화면으로도 못 들어가고 대시보드도 못 봄. "상태 새로고침" 버튼 제공.
+- **`DashboardClient` 본체**: `me`/`meReady` state 추가 — 세션 있으면 `app_users`에서 본인 행 조회 → `!me || me.status!=="approved"`면 `PendingGate` 렌더, 그 외엔 정상 대시보드.
+- **헤더**: 상단에 `me.email` + 역할 배지(슈퍼관리자=보라/일반=하늘) 칩 표시.
+- **`UserAdminPanel`(슈퍼관리자에게만 렌더, `me.role==="super_admin"`일 때 계열사별 위험 개요 위에 삽입)**:
+  - 상단 폼 — 이메일/초기 비밀번호(8자+)/역할 선택 → "계정 생성" 버튼 → `supabase.functions.invoke("admin-users",{action:"create_user",...})`.
+  - 사용자 목록(`app_users` 전체, `select("*")` — RLS로 슈퍼관리자만 전체 조회 가능) — 각 행에 이메일/역할칩/상태칩 + 버튼: **승인/거부/정지**(`rpc("set_user_status")`) · **비밀번호 지정**(인라인 입력 → `functions.invoke("admin-users",{action:"set_password",...})`) · **역할전환**(`rpc("set_user_role")`) · **삭제**(확인창 → `functions.invoke(...,{action:"delete_user"})`). 본인 행은 조작 버튼 숨김(자가 잠금 방지, 서버에서도 재차 차단).
+
+### 배포 절차 이슈 — 브라우저 대량 텍스트 주입 반복 실패 → 클립보드 방식으로 해결
+- **문제**: `DashboardClient.tsx` 변경분이 커서 `javascript_tool`에 base64를 직접 문자열로 넣는 방식(마이그레이션 10KB·Edge Function 8KB는 성공)이 **더 큰 사이즈(16~32KB, ops JSON 방식)에서 반복적으로 `SyntaxError: Invalid or unexpected token`** 발생 — 원인은 내가 tool 호출 텍스트를 작성하면서 중간에 잘려 들어간 것(전송/작성 오류), 사이즈 자체 한계는 아니었음.
+- **해결(재현 가능한 패턴, 이후에도 이 방식 우선 사용)**: ① `python3 base64.b64encode` → 파일로 저장 ② `pbcopy < file`로 시스템 클립보드에 적재(ASCII-safe라 한글 깨짐 없음, `pbpaste | wc -c`로 클립보드 길이 사전 검증) ③ 브라우저 페이지에 임시 `<textarea id="__paste_target">` DOM 삽입(`javascript_tool`) ④ `computer` 툴로 그 textarea를 클릭 + `cmd+v` ⑤ `javascript_tool`로 textarea 값 읽어 **길이 정확히 일치하는지 검증** ⑥ `TextDecoder('utf-8',{fatal:true})`로 디코드 + 핵심 함수/마커 문자열 존재 여부 다중 체크(전부 true여야 진행) ⑦ 통과 시에만 CodeMirror 6 `view.dispatch({changes:{from:0,to:len,insert:text}})`로 반영, 반영 직후 `now===text`로 재검증 ⑧ 임시 textarea 제거.
+  - 첫 시도에서 `cmd+v` 직후 값이 비어 있었던 적이 있었음 → **클릭 후 `document.activeElement`가 실제로 그 textarea인지 확인하고 나서 재시도**하면 성공(포커스 타이밍 이슈로 추정).
+- **커밋**: `2c9ed24` "feat(auth): 사용자 신청/승인 워크플로 + 슈퍼관리자 계정관리 UI 추가" (main 직접, co-author claude). `npm run typecheck` 로컬 통과 확인 후 진행.
+
+### 보안 확인 사항 (설계 시 명시적으로 지킨 것)
+- **service_role 값은 어디에도 노출 안 함** — Edge Function 내부에서만, Deno 환경변수(Supabase 자동 주입)로 사용. 코드·커밋·문서 어디에도 값 없음.
+- **AI(나)는 실제 비밀번호 값을 입력하지 않음** — 기능만 구현, 초기 비밀번호/비밀번호 지정은 슈퍼관리자(사용자)가 UI에서 직접 타이핑.
+- **자가 잠금 방지**: RPC와 Edge Function 둘 다 "본인 대상 상태/역할/비밀번호/삭제 조작 차단"을 서버측에서 강제(클라이언트 숨김 + 서버 재검증 이중).
+- **승인 전 데이터 완전 차단**: RLS가 `authenticated`가 아니라 `is_approved_user()` 기준이라, 이메일 인증까지 마친 로그인 계정이라도 슈퍼관리자 승인 전에는 breach_findings 등 실데이터를 전혀 못 봄(anon과 동일하게 빈 결과).
+
+### 상태 / 다음 TODO
+- [x] 마이그레이션 009 적용 + 시드 확인(super_admins=1, approved=1).
+- [x] Edge Function `admin-users` 배포 + verify_jwt OFF 설정.
+- [x] 클라이언트 UI 구현 + typecheck 통과 + GitHub 배포(`2c9ed24`) — **CI 빌드/Pages 반영 여부는 다음 세션에서 Actions 로그로 재확인 필요**(이 세션에서 실행 여부 미확인 상태로 종료될 수 있음).
+- [ ] **라이브 동작 검증**: dark.jbax.co.kr에서 실제로 "계정 신청" 폼이 뜨는지, 슈퍼관리자로 로그인 시 "사용자 관리" 패널이 보이는지, 계정 생성·비밀번호 지정이 실제로 동작하는지 브라우저로 확인.
+- [ ] Supabase Auth 설정에서 **가입(Sign up) 허용 여부**와 **이메일 인증 발송 설정**(무료 SMTP 한도 이슈 재확인, [[16. 세션 로그]]의 "관리자 비밀번호 설정 완료 미확인"과 동일 계열 리스크) 점검 — 신청자가 인증 메일을 못 받으면 가입 자체가 막힘.
+- [ ] (이어서) `discovered_at` 최초발견일 보존 개선 — [[16. 세션 로그]] 참조, 아직 미착수.
