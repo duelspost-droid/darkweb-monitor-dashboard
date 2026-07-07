@@ -4,3 +4,8 @@ project_id = "darkweb-monitor-dashboard"
 [functions.scan-breaches]
 # JWT 대신 공유 시크릿(SCAN_SECRET) 헤더로 보호 → pg_cron 이 service_role 키 없이 호출 가능.
 verify_jwt = false
+
+[functions.admin-users]
+# 프리플라이트(OPTIONS) 허용 위해 verify_jwt=false. 함수 코드에서 직접 Bearer JWT 검증 +
+# app_users.role=super_admin 확인 후에만 service_role Admin API 실행.
+verify_jwt = false
