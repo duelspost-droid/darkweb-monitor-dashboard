@@ -786,8 +786,23 @@ function AdminAccountsPanel({ currentEmail }: { currentEmail: string }) {
 
   async function callAdmin(payload: Record<string, unknown>): Promise<{ ok: boolean; error?: string }> {
     const { data, error } = await supabase.functions.invoke("admin-users", { body: payload });
+    if (error) {
+      // functions.invoke 는 4xx/5xx 를 error(FunctionsHttpError)로 주고, 응답 본문은 error.context(Response)에 담는다.
+      // → 함수가 내려준 한글 에러 메시지는 여기서 꺼내야 한다(안 그러면 폴백 로직·안내가 전부 깨진다).
+      let msg = error.message || "요청 실패";
+      try {
+        const ctx = (error as { context?: Response }).context;
+        if (ctx && typeof ctx.json === "function") {
+          const body = await ctx.json();
+          if (body && typeof body.error === "string") msg = body.error;
+        }
+      } catch {
+        /* 본문 파싱 실패 시 기본 메시지 유지 */
+      }
+      return { ok: false, error: msg };
+    }
     const apiErr = (data as { error?: string } | null)?.error;
-    if (error || apiErr) return { ok: false, error: apiErr || error?.message || "요청 실패" };
+    if (apiErr) return { ok: false, error: apiErr };
     return { ok: true };
   }
 
