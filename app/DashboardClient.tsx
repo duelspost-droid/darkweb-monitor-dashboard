@@ -18,8 +18,6 @@ import {
   ShieldAlert,
   ShieldCheck,
   Sparkles,
-  Settings,
-  X,
 } from "lucide-react";
 import type { Session } from "@supabase/supabase-js";
 import { PageHero } from "@/components/ui/PageHero";
@@ -28,7 +26,6 @@ import { StatTile } from "@/components/ui/StatTile";
 import { BarList } from "@/components/ui/BarList";
 import { supabase, supabaseConfigured, adminEmail } from "@/lib/supabase/browserClient";
 import type { BreachScan, BreachSeverity, InfostealerFinding, InfostealerHost } from "@/lib/types/breachMonitor";
-import sourceCodeExposures from "@/data/security/source_code_exposures.json";
 
 const SEVERITY_META: Record<BreachSeverity, { label: string; color: string; chip: string }> = {
   critical: { label: "심각", color: "#be123c", chip: "bg-rose-100 text-rose-700 border-rose-300" },
@@ -368,9 +365,7 @@ async function fetchScan(): Promise<BreachScan> {
   if (bf.error) throw bf.error;
   if (sr.error) throw sr.error;
   if (inf.error) throw inf.error;
-  // infostealer_hosts: 테이블 미생성/권한 오류 시 빈 배열(대시보드 중단 방지).
-  // 단, 오류를 조용히 삼키면 스키마 미생성/RLS 오류와 '감염 호스트 0건'을 구분 못 하므로 경고로 남긴다.
-  if (hosts.error) console.warn("[fetchScan] infostealer_hosts 조회 오류 — 빈 목록으로 처리:", hosts.error.message);
+  // infostealer_hosts: 테이블 미생성/권한 오류 시 빈 배열(대시보드 중단 방지)
 
   const findings = (bf.data ?? []).map((r) => ({
     id: r.finding_id,
@@ -462,14 +457,35 @@ function LoginGate({ onSignedIn }: { onSignedIn: () => void }) {
   // 고정 관리자 이메일이 설정돼 있으면 비밀번호만 받는다.
   // 미설정(또는 "다른 계정") 일 때만 이메일 입력을 노출.
   const hasFixedEmail = Boolean(adminEmail);
+  const [mode, setMode] = useState<"login" | "signup">("login");
   const [email, setEmail] = useState(adminEmail);
   const [showEmail, setShowEmail] = useState(!hasFixedEmail);
   const [pw, setPw] = useState("");
+  const [pw2, setPw2] = useState("");
   const [err, setErr] = useState("");
+  const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
+  const isSignup = mode === "signup";
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    setErr("");
+    setMsg("");
+    if (isSignup) {
+      const em = email.trim();
+      if (!em) return setErr("이메일을 입력하세요.");
+      if (pw.length < 8) return setErr("비밀번호는 8자 이상이어야 합니다.");
+      if (pw !== pw2) return setErr("두 비밀번호가 일치하지 않습니다.");
+      setBusy(true);
+      const { error } = await supabase.auth.signUp({ email: em, password: pw });
+      setBusy(false);
+      if (error) return setErr("신청 실패: " + error.message);
+      setMsg("계정 신청 완료 — 확인 메일의 링크로 이메일을 인증한 뒤, 슈퍼관리자 승인을 기다려 주세요.");
+      setMode("login");
+      setPw("");
+      setPw2("");
+      return;
+    }
     const loginEmail = (showEmail ? email : adminEmail).trim();
     if (!loginEmail) {
       setErr("관리자 이메일이 설정되지 않았습니다. ‘다른 계정으로 로그인’으로 이메일을 입력하세요.");
@@ -477,7 +493,6 @@ function LoginGate({ onSignedIn }: { onSignedIn: () => void }) {
       return;
     }
     setBusy(true);
-    setErr("");
     const { error } = await supabase.auth.signInWithPassword({ email: loginEmail, password: pw });
     setBusy(false);
     if (error) setErr(showEmail ? "로그인 실패: 이메일/비밀번호를 확인하세요." : "로그인 실패: 비밀번호를 확인하세요.");
@@ -492,13 +507,13 @@ function LoginGate({ onSignedIn }: { onSignedIn: () => void }) {
             <Lock size={18} aria-hidden />
           </span>
           <div>
-            <h1 className="text-lg font-bold text-ink">관리자 로그인</h1>
+            <h1 className="text-lg font-bold text-ink">{isSignup ? "계정 신청" : "관리자 로그인"}</h1>
             <p className="text-xs text-muted">다크웹 유출 모니터링 · 내부 전용</p>
           </div>
         </div>
 
-        {/* 이메일: 고정 계정이면 숨기고, 어떤 계정으로 들어가는지 칩으로 안내 */}
-        {showEmail ? (
+        {/* 이메일: 신청 모드거나 '다른 계정' 이면 입력, 고정 계정 로그인이면 칩으로 안내 */}
+        {isSignup || showEmail ? (
           <>
             <label className="mb-1 block text-xs font-semibold text-muted">이메일</label>
             <input
@@ -521,23 +536,30 @@ function LoginGate({ onSignedIn }: { onSignedIn: () => void }) {
         <label className="mb-1 block text-xs font-semibold text-muted">비밀번호</label>
         <input
           type="password"
-          autoComplete="current-password"
+          autoComplete={isSignup ? "new-password" : "current-password"}
           required
           autoFocus
           value={pw}
           onChange={(e) => setPw(e.target.value)}
-          className="mb-4 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-rose-400"
+          className="mb-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-rose-400"
         />
+        {isSignup && (
+          <>
+            <label className="mb-1 block text-xs font-semibold text-muted">비밀번호 확인</label>
+            <input type="password" autoComplete="new-password" required value={pw2} onChange={(e) => setPw2(e.target.value)} className="mb-4 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-rose-400" />
+          </>
+        )}
         {err && <p className="mb-3 text-xs font-semibold text-rose-600">{err}</p>}
+        {msg && <p className="mb-3 rounded-lg bg-teal-50 px-3 py-2 text-xs font-semibold text-teal-700">{msg}</p>}
         <button
           type="submit"
           disabled={busy}
           className="w-full rounded-lg bg-cyan-700 py-2.5 text-sm font-bold text-white transition hover:bg-cyan-600 disabled:opacity-60"
         >
-          {busy ? "확인 중…" : "로그인"}
+          {busy ? "처리 중…" : isSignup ? "계정 신청" : "로그인"}
         </button>
 
-        {hasFixedEmail && (
+        {!isSignup && hasFixedEmail && (
           <button
             type="button"
             onClick={() => {
@@ -551,11 +573,208 @@ function LoginGate({ onSignedIn }: { onSignedIn: () => void }) {
           </button>
         )}
 
+        <button
+          type="button"
+          onClick={() => {
+            setMode(isSignup ? "login" : "signup");
+            setErr("");
+            setMsg("");
+            setPw("");
+            setPw2("");
+            if (isSignup) {
+              setShowEmail(!hasFixedEmail);
+              setEmail(adminEmail);
+            } else {
+              setShowEmail(true);
+              setEmail("");
+            }
+          }}
+          className="mt-3 block w-full text-center text-[11px] font-semibold text-cyan-700 underline-offset-2 hover:underline"
+        >
+          {isSignup ? "← 로그인으로 돌아가기" : "계정이 없으신가요? 계정 신청"}
+        </button>
+
         <p className="mt-4 text-center text-[11px] leading-5 text-muted">
-          승인된 관리자만 접근할 수 있습니다. 데이터는 로그인 후에만 조회됩니다(RLS 보호).
+          {isSignup
+            ? "신청 후 이메일 인증 + 슈퍼관리자 승인이 완료되면 접근할 수 있습니다."
+            : "승인된 사용자만 접근할 수 있습니다. 데이터는 로그인 후에만 조회됩니다(RLS 보호)."}
         </p>
       </form>
     </div>
+  );
+}
+
+// ── 사용자 계정(app_users) 타입 / 메타 ────────────────────────────────────
+type AppUser = {
+  id: string;
+  email: string | null;
+  role: "super_admin" | "general";
+  status: "pending" | "approved" | "rejected" | "suspended";
+  requested_at?: string;
+  decided_at?: string | null;
+  decided_by?: string | null;
+  note?: string | null;
+};
+
+const USER_STATUS_META: Record<string, { label: string; cls: string }> = {
+  pending: { label: "승인 대기", cls: "border-amber-300 bg-amber-100 text-amber-700" },
+  approved: { label: "승인됨", cls: "border-teal-300 bg-teal-100 text-teal-700" },
+  rejected: { label: "거부됨", cls: "border-rose-300 bg-rose-100 text-rose-700" },
+  suspended: { label: "정지됨", cls: "border-slate-300 bg-slate-200 text-slate-600" },
+};
+const USER_ROLE_META: Record<string, { label: string; cls: string }> = {
+  super_admin: { label: "슈퍼관리자", cls: "border-violet-300 bg-violet-100 text-violet-700" },
+  general: { label: "일반", cls: "border-sky-300 bg-sky-100 text-sky-700" },
+};
+
+// 로그인은 됐으나 승인/역할이 없는 사용자용 안내 화면.
+function PendingGate({ me, email, onSignOut }: { me: AppUser | null; email: string; onSignOut: () => void }) {
+  const status = me?.status ?? "pending";
+  const msg =
+    status === "rejected" ? "계정 신청이 거부되었습니다. 슈퍼관리자에게 문의하세요."
+    : status === "suspended" ? "계정이 정지되었습니다. 슈퍼관리자에게 문의하세요."
+    : "계정이 승인 대기 중입니다. 슈퍼관리자 승인 후 이용할 수 있습니다.";
+  return (
+    <div className="flex min-h-[70vh] items-center justify-center px-4">
+      <div className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-7 text-center shadow-xl">
+        <span className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-amber-100 text-amber-700"><Lock size={20} aria-hidden /></span>
+        <h1 className="text-lg font-bold text-ink">{USER_STATUS_META[status]?.label ?? "대기"}</h1>
+        <p className="mt-2 text-sm text-muted">{msg}</p>
+        <p className="mt-1 break-all font-mono text-xs text-slate-500">{email}</p>
+        <button onClick={() => window.location.reload()} className="mt-5 w-full rounded-lg bg-cyan-700 py-2.5 text-sm font-bold text-white hover:bg-cyan-600">상태 새로고침</button>
+        <button onClick={onSignOut} className="mt-2 w-full rounded-lg border border-slate-300 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50">로그아웃</button>
+      </div>
+    </div>
+  );
+}
+
+// 슈퍼관리자 전용 — 사용자 관리(계정 생성·비밀번호 지정/초기화·승인/거부/정지·역할·삭제).
+// 계정 생성/비밀번호/삭제는 Edge Function admin-users(service_role) 호출, 승인/역할은 RPC.
+function UserAdminPanel({ selfId }: { selfId: string }) {
+  const [users, setUsers] = useState<AppUser[]>([]);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState("");
+  const [nEmail, setNEmail] = useState("");
+  const [nPw, setNPw] = useState("");
+  const [nRole, setNRole] = useState<"general" | "super_admin">("general");
+  const [okMsg, setOkMsg] = useState("");
+  const [pwFor, setPwFor] = useState<string | null>(null);
+  const [pwVal, setPwVal] = useState("");
+
+  const reload = useCallback(async () => {
+    setErr("");
+    const { data, error } = await supabase.from("app_users").select("*").order("requested_at", { ascending: false });
+    if (error) setErr("목록 조회 실패: " + error.message);
+    else setUsers((data ?? []) as AppUser[]);
+  }, []);
+  useEffect(() => { reload(); }, [reload]);
+
+  async function callAdmin(payload: Record<string, unknown>): Promise<boolean> {
+    setErr(""); setOkMsg("");
+    const { data, error } = await supabase.functions.invoke("admin-users", { body: payload });
+    const apiErr = (data as { error?: string } | null)?.error;
+    if (error || apiErr) { setErr(apiErr || error?.message || "요청 실패"); return false; }
+    return true;
+  }
+
+  async function createUser(e: React.FormEvent) {
+    e.preventDefault();
+    setErr(""); setOkMsg("");
+    if (nPw.length < 8) return setErr("비밀번호는 8자 이상이어야 합니다.");
+    setBusy("create");
+    const ok = await callAdmin({ action: "create_user", email: nEmail.trim(), password: nPw, role: nRole });
+    setBusy("");
+    if (ok) { setOkMsg(`계정 생성됨: ${nEmail.trim()}`); setNEmail(""); setNPw(""); setNRole("general"); reload(); }
+  }
+  async function changeStatus(u: AppUser, status: string) {
+    setBusy(u.id + status); setErr(""); setOkMsg("");
+    const { error } = await supabase.rpc("set_user_status", { p_user: u.id, p_status: status, p_note: null });
+    setBusy("");
+    if (error) setErr("상태 변경 실패: " + error.message); else reload();
+  }
+  async function changeRole(u: AppUser) {
+    const role = u.role === "super_admin" ? "general" : "super_admin";
+    setBusy(u.id + "role"); setErr(""); setOkMsg("");
+    const { error } = await supabase.rpc("set_user_role", { p_user: u.id, p_role: role });
+    setBusy("");
+    if (error) setErr("역할 변경 실패: " + error.message); else reload();
+  }
+  async function applyPassword(u: AppUser) {
+    if (pwVal.length < 8) return setErr("비밀번호는 8자 이상이어야 합니다.");
+    setBusy(u.id + "pw");
+    const ok = await callAdmin({ action: "set_password", user_id: u.id, password: pwVal });
+    setBusy("");
+    if (ok) { setPwFor(null); setPwVal(""); setOkMsg(`비밀번호 변경됨: ${u.email}`); }
+  }
+  async function removeUser(u: AppUser) {
+    if (!window.confirm(`정말 삭제할까요?\n${u.email}\n계정과 접근 권한이 영구 삭제됩니다.`)) return;
+    setBusy(u.id + "del");
+    const ok = await callAdmin({ action: "delete_user", user_id: u.id });
+    setBusy("");
+    if (ok) { setOkMsg("삭제됨"); reload(); }
+  }
+
+  const pendingCount = users.filter((u) => u.status === "pending").length;
+
+  return (
+    <Panel title="사용자 관리 (슈퍼관리자)" subtitle="계정 직접 생성 · 비밀번호 지정/초기화 · 승인/거부/정지 · 역할" right={<span className="chip chip-neutral">{users.length}명{pendingCount > 0 ? ` · 대기 ${pendingCount}` : ""}</span>}>
+      <form onSubmit={createUser} className="mb-4 flex flex-wrap items-end gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
+        <div className="min-w-[180px] flex-1">
+          <label className="mb-1 block text-[11px] font-semibold text-muted">이메일</label>
+          <input type="email" required value={nEmail} onChange={(e) => setNEmail(e.target.value)} placeholder="user@company.com" className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm outline-none focus:border-sky-400" />
+        </div>
+        <div className="min-w-[150px] flex-1">
+          <label className="mb-1 block text-[11px] font-semibold text-muted">초기 비밀번호 (8자+)</label>
+          <input type="text" required value={nPw} onChange={(e) => setNPw(e.target.value)} placeholder="초기 비밀번호" autoComplete="off" className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 font-mono text-sm outline-none focus:border-sky-400" />
+        </div>
+        <div>
+          <label className="mb-1 block text-[11px] font-semibold text-muted">역할</label>
+          <select value={nRole} onChange={(e) => setNRole(e.target.value as "general" | "super_admin")} className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm outline-none focus:border-sky-400">
+            <option value="general">일반</option>
+            <option value="super_admin">슈퍼관리자</option>
+          </select>
+        </div>
+        <button type="submit" disabled={busy === "create"} className="rounded-lg bg-cyan-700 px-3 py-1.5 text-sm font-bold text-white hover:bg-cyan-600 disabled:opacity-50">{busy === "create" ? "생성 중…" : "계정 생성"}</button>
+      </form>
+      {okMsg && <p className="mb-2 text-xs font-semibold text-teal-700">{okMsg}</p>}
+      {err && <p className="mb-2 text-xs font-semibold text-rose-600">{err}</p>}
+
+      <div className="space-y-1.5">
+        {users.map((u) => {
+          const st = USER_STATUS_META[u.status] ?? USER_STATUS_META.pending;
+          const rl = USER_ROLE_META[u.role] ?? USER_ROLE_META.general;
+          const isSelf = u.id === selfId;
+          return (
+            <div key={u.id} className="rounded-xl border border-slate-200 bg-white p-2.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="break-all font-mono text-sm font-semibold text-ink">{u.email}</span>
+                <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${rl.cls}`}>{rl.label}</span>
+                <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${st.cls}`}>{st.label}</span>
+                {isSelf && <span className="text-[11px] text-muted">(본인)</span>}
+              </div>
+              {!isSelf && (
+                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                  {u.status !== "approved" && <button onClick={() => changeStatus(u, "approved")} disabled={!!busy} className="rounded-lg bg-teal-600 px-2.5 py-1 text-xs font-bold text-white hover:bg-teal-700 disabled:opacity-50">승인</button>}
+                  {u.status === "pending" && <button onClick={() => changeStatus(u, "rejected")} disabled={!!busy} className="rounded-lg border border-rose-300 px-2.5 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50">거부</button>}
+                  {u.status === "approved" && <button onClick={() => changeStatus(u, "suspended")} disabled={!!busy} className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-100 disabled:opacity-50">정지</button>}
+                  <button onClick={() => { setPwFor(pwFor === u.id ? null : u.id); setPwVal(""); }} className="rounded-lg border border-sky-300 px-2.5 py-1 text-xs font-semibold text-sky-700 hover:bg-sky-50">비밀번호 지정</button>
+                  <button onClick={() => changeRole(u)} disabled={!!busy} className="rounded-lg border border-violet-300 px-2.5 py-1 text-xs font-semibold text-violet-700 hover:bg-violet-50 disabled:opacity-50">{u.role === "super_admin" ? "일반으로" : "슈퍼관리자로"}</button>
+                  <button onClick={() => removeUser(u)} disabled={!!busy} className="rounded-lg border border-rose-300 px-2.5 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50">삭제</button>
+                </div>
+              )}
+              {pwFor === u.id && !isSelf && (
+                <div className="mt-2 flex flex-wrap items-center gap-1.5 rounded-lg bg-sky-50 p-2">
+                  <input type="text" value={pwVal} onChange={(e) => setPwVal(e.target.value)} placeholder="새 비밀번호 (8자+)" autoComplete="off" className="min-w-[180px] flex-1 rounded-lg border border-slate-300 px-2.5 py-1.5 font-mono text-sm outline-none focus:border-sky-400" />
+                  <button onClick={() => applyPassword(u)} disabled={busy === u.id + "pw"} className="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-sky-700 disabled:opacity-50">{busy === u.id + "pw" ? "적용 중…" : "적용"}</button>
+                  <button onClick={() => { setPwFor(null); setPwVal(""); }} className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100">취소</button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {users.length === 0 && <p className="py-6 text-center text-sm text-muted">사용자가 없습니다.</p>}
+      </div>
+    </Panel>
   );
 }
 
@@ -674,166 +893,6 @@ function RemediationLogPanel({ reloadKey }: { reloadKey: string }) {
   );
 }
 
-// 공개 소스코드 노출 (GitHub 등) — 자사 OSINT 결과 + 권고 조치. data/security/source_code_exposures.json 참조.
-const SC_TYPE: Record<string, { label: string; cls: string }> = {
-  email: { label: "직원 이메일", cls: "border-rose-300 bg-rose-100 text-rose-700" },
-  content: { label: "콘텐츠 스크랩", cls: "border-amber-300 bg-amber-100 text-amber-700" },
-  challenge: { label: "공모전", cls: "border-sky-300 bg-sky-100 text-sky-700" },
-  domain: { label: "만료 도메인", cls: "border-amber-300 bg-amber-100 text-amber-700" },
-  config: { label: "시스템 URL", cls: "border-slate-300 bg-slate-100 text-slate-600" },
-  vuln: { label: "웹취약점", cls: "border-rose-300 bg-rose-100 text-rose-700" },
-  info: { label: "참고", cls: "border-slate-300 bg-slate-100 text-slate-500" },
-};
-const SC_SEV: Record<string, { label: string; cls: string }> = {
-  high: { label: "높음", cls: "text-rose-700" },
-  medium: { label: "보통", cls: "text-amber-700" },
-  low: { label: "낮음", cls: "text-slate-500" },
-  info: { label: "정보", cls: "text-sky-700" },
-};
-type ScExposure = { id: string; type: string; severity: string; institution: string; domain: string; subject: string; repo: string; url: string; exposure: string; action: string; status: string };
-// 고객 개인정보 노출 — 공개 소스코드 스캔에서 탐지된 CI/DI/주민번호/카드 등(실제 값 미저장, 유형·위치만).
-const PII_SEV_STYLE: Record<string, string> = {
-  critical: "border-rose-300 bg-rose-100 text-rose-700",
-  high: "border-amber-300 bg-amber-100 text-amber-700",
-  medium: "border-sky-300 bg-sky-100 text-sky-700",
-  low: "border-slate-300 bg-slate-100 text-slate-600",
-};
-type PiiFinding = { id: string; source: string; breachTitle: string; dataClasses: string[]; severity: string; referenceUrl?: string };
-function CustomerPiiPanel({ findings }: { findings: PiiFinding[] }) {
-  const pii = findings.filter((f) => f.source === "고객정보 노출 (GitHub)");
-  return (
-    <Panel
-      title="고객 개인정보 노출 (공개 소스코드)"
-      subtitle="공개 GitHub 코드에서 CI·DI·주민번호·카드 등 고객 개인정보가 탐지된 건 — 실제 값은 저장하지 않고 유형·위치만 기록"
-      right={pii.length
-        ? <span className="inline-flex items-center gap-1 rounded-full border border-rose-300 bg-rose-100 px-3 py-1 text-xs font-bold text-rose-700"><ShieldAlert size={13} aria-hidden /> {pii.length}건 · 즉시 조치</span>
-        : <span className="inline-flex items-center gap-1 rounded-full border border-teal-200 bg-teal-50 px-3 py-1 text-xs font-bold text-teal-700"><ShieldCheck size={13} aria-hidden /> 노출 없음</span>}
-    >
-      {pii.length === 0 ? (
-        <p className="flex items-center gap-2 py-3 text-sm text-muted"><ShieldCheck size={16} className="shrink-0 text-teal-600" aria-hidden /> 현재 공개 소스코드에서 탐지된 고객 개인정보 노출이 없습니다. 매 스캔 자동 점검합니다.</p>
-      ) : (
-        <ul className="space-y-2">
-          {pii.map((f) => (
-            <li key={f.id} className="rounded-xl border border-rose-300 bg-rose-50 p-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${PII_SEV_STYLE[f.severity] ?? PII_SEV_STYLE.high}`}>{f.severity === "critical" ? "심각" : f.severity === "high" ? "높음" : f.severity}</span>
-                <span className="min-w-0 break-all font-mono text-sm font-semibold text-ink">{f.breachTitle}</span>
-                {f.referenceUrl ? <a href={f.referenceUrl} target="_blank" rel="noreferrer" className="ml-auto inline-flex shrink-0 items-center gap-1 font-mono text-[11px] text-sky-600 hover:underline">열기 <span aria-hidden>↗</span></a> : null}
-              </div>
-              <div className="mt-1.5 flex flex-wrap gap-1">
-                {f.dataClasses.map((c) => <span key={c} className="rounded-full border border-rose-200 bg-white/60 px-2 py-0.5 text-[11px] font-semibold text-rose-700">{c}</span>)}
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-      <p className="mt-3 flex gap-2 border-t border-slate-100 pt-3 text-[11px] leading-5 text-amber-700"><Info size={13} className="mt-0.5 shrink-0 text-sky-500" aria-hidden /><span>탐지 원칙: 실제 값(CI/DI/주민번호 등)은 저장·표시하지 않고 <b>유형·위치만</b> 기록(PIPA·전자금융감독규정). 발견 시 해당 레포 즉시 takedown + 유출 고객 통지·보호.</span></p>
-    </Panel>
-  );
-}
-
-function SourceCodeExposurePanel() {
-  const data = sourceCodeExposures as { scannedAt: string; source: string; findings: ScExposure[] };
-  const findings = data.findings ?? [];
-  const openCount = findings.filter((f) => f.status === "open").length;
-  return (
-    <Panel title="공개 소스코드 노출 (GitHub)" subtitle="자사 도메인·계정이 공개 소스코드/코드검색에 노출된 건 + 권고 조치" right={<span className="chip chip-neutral">조치 필요 {openCount} / 총 {findings.length}</span>}>
-      <p className="mb-3 flex gap-2 text-[11px] leading-5 text-muted"><Info size={13} className="mt-0.5 shrink-0 text-sky-500" aria-hidden /><span>자사 방어적 OSINT(GitHub 코드검색 + 레포 딥다이브). 점검일 {data.scannedAt}. 실 시크릿(.env/키)은 미검출 — 직원 이메일 PII가 우선 조치 대상입니다.</span></p>
-      <ul className="space-y-2">
-        {findings.map((f) => {
-          const t = SC_TYPE[f.type] ?? SC_TYPE.config;
-          const s = SC_SEV[f.severity] ?? SC_SEV.low;
-          return (
-            <li key={f.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${t.cls}`}>{t.label}</span>
-                <span className="min-w-0 break-all font-mono text-sm font-semibold text-ink">{f.subject}</span>
-                <span className="text-[11px] text-muted">· {f.institution}</span>
-                <span className={`ml-auto text-[11px] font-semibold ${s.cls}`}>{s.label}{f.status === "reviewed" ? " · 확인됨" : ""}</span>
-              </div>
-              <p className="mt-1.5 text-[12px] leading-5 text-slate-700">{f.exposure}</p>
-              <a href={f.url} target="_blank" rel="noreferrer" className="mt-1.5 inline-flex items-center gap-1 break-all font-mono text-[11px] text-sky-600 hover:underline">{f.repo} <span aria-hidden>↗</span></a>
-              <p className="mt-1.5 flex gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] leading-5 text-amber-900"><ShieldCheck size={12} className="mt-0.5 shrink-0" aria-hidden /><span><b>권고 조치:</b> {f.action}</span></p>
-            </li>
-          );
-        })}
-      </ul>
-    </Panel>
-  );
-}
-
-// 관리자 계정 관리 — admin_allowlist(대시보드 접근 권한) 추가/삭제. 승인 관리자만(RLS).
-function AdminAccountsPanel({ currentEmail }: { currentEmail: string }) {
-  const [rows, setRows] = useState<Array<{ email: string; note: string | null; created_at: string }>>([]);
-  const [email, setEmail] = useState("");
-  const [note, setNote] = useState("");
-  const [err, setErr] = useState("");
-  const [busy, setBusy] = useState(false);
-  const load = useCallback(() => {
-    supabase.from("admin_allowlist").select("email,note,created_at").order("created_at").then(({ data, error }) => {
-      if (error) setErr(error.message);
-      else { setRows((data ?? []) as typeof rows); setErr(""); }
-    });
-  }, []);
-  useEffect(() => { load(); }, [load]);
-
-  async function add() {
-    const e = email.trim().toLowerCase();
-    if (!/^\S+@\S+\.\S+$/.test(e)) { setErr("올바른 이메일 형식을 입력하세요."); return; }
-    setBusy(true); setErr("");
-    const { error } = await supabase.from("admin_allowlist").insert({ email: e, note: note.trim() || null });
-    setBusy(false);
-    if (error) setErr(error.code === "23505" ? "이미 등록된 관리자입니다." : "추가 실패: " + error.message);
-    else { setEmail(""); setNote(""); load(); }
-  }
-  async function remove(e: string) {
-    setErr("");
-    const { error } = await supabase.from("admin_allowlist").delete().eq("email", e);
-    if (error) setErr("삭제 실패: " + error.message); else load();
-  }
-
-  return (
-    <Panel title="관리자 계정 관리" subtitle="대시보드 접근 권한(allowlist) — 승인 관리자만 추가·삭제할 수 있습니다." right={<span className="chip chip-neutral">{rows.length}명</span>}>
-      <div className="mb-3 flex flex-wrap items-end gap-2">
-        <div className="min-w-0 basis-full sm:basis-0 sm:flex-1">
-          <label className="mb-1 block text-xs font-semibold text-muted">이메일</label>
-          <input value={email} onChange={(e) => setEmail(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") add(); }} type="email" placeholder="name@jbfg.com" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-sky-400" />
-        </div>
-        <div className="min-w-0 basis-full sm:basis-0 sm:flex-1">
-          <label className="mb-1 block text-xs font-semibold text-muted">메모 (선택)</label>
-          <input value={note} onChange={(e) => setNote(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") add(); }} placeholder="예: 보안팀 김OO" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-sky-400" />
-        </div>
-        <button onClick={add} disabled={busy} className="w-full rounded-lg bg-cyan-700 px-4 py-2 text-sm font-bold text-white transition hover:bg-cyan-600 disabled:opacity-60 sm:w-auto">{busy ? "추가…" : "추가"}</button>
-      </div>
-      {err && <p className="mb-2 text-xs font-semibold text-rose-600">{err}</p>}
-      <ul className="space-y-1.5">
-        {rows.map((r) => {
-          const isMe = r.email === currentEmail;
-          const isPrimary = r.email === adminEmail;
-          const locked = isMe || isPrimary;
-          return (
-            <li key={r.email} className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-              <span className="break-all font-mono text-sm text-ink">{r.email}</span>
-              {isMe && <span className="rounded-full border border-sky-300 bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold text-sky-700">나</span>}
-              {isPrimary && <span className="rounded-full border border-slate-300 px-1.5 py-0.5 text-[10px] font-semibold text-muted">기본</span>}
-              {r.note && <span className="text-xs text-muted">· {r.note}</span>}
-              <span className="ml-auto text-[11px] text-muted">{fmtDate(r.created_at)}</span>
-              {locked
-                ? <span className="text-[11px] text-muted">삭제 불가</span>
-                : <button onClick={() => remove(r.email)} className="rounded-lg border border-rose-300 px-2 py-1 text-xs font-semibold text-rose-600 hover:bg-rose-50">삭제</button>}
-            </li>
-          );
-        })}
-        {rows.length === 0 && !err && <li className="py-4 text-center text-sm text-muted">관리자 목록을 불러오는 중…</li>}
-      </ul>
-      <p className="mt-3 flex gap-2 border-t border-slate-100 pt-3 text-[11px] leading-5 text-amber-700">
-        <AlertTriangle size={13} className="mt-0.5 shrink-0" aria-hidden />
-        <span>이 목록은 <b>데이터 접근 권한(RLS)</b>만 부여합니다. 추가한 사람이 실제 로그인하려면 Supabase Auth에 해당 이메일 계정(초대/가입)이 별도로 있어야 합니다. 본인 계정·기본 관리자는 잠금 방지를 위해 삭제할 수 없습니다.</span>
-      </p>
-    </Panel>
-  );
-}
-
 export default function DashboardClient() {
   const [session, setSession] = useState<Session | null>(null);
   const [ready, setReady] = useState(false);
@@ -841,7 +900,8 @@ export default function DashboardClient() {
   const [loadErr, setLoadErr] = useState("");
   const [mustSetPw, setMustSetPw] = useState(false); // 초대/재설정 링크로 진입 → 비번 설정 필요
   const [showSetPw, setShowSetPw] = useState(false); // 로그인 상태에서 수동 변경
-  const [showSettings, setShowSettings] = useState(false); // 설정 드로어(관리자 계정관리·조치 변경 이력)
+  const [me, setMe] = useState<AppUser | null>(null); // 현재 사용자 프로필(역할/상태)
+  const [meReady, setMeReady] = useState(false);
 
   useEffect(() => {
     if (!supabaseConfigured) {
@@ -862,6 +922,31 @@ export default function DashboardClient() {
     });
     return () => sub.subscription.unsubscribe();
   }, []);
+
+  // 로그인한 사용자의 app_users 프로필(역할/상태) 조회 → 승인 게이트/권한 판단.
+  useEffect(() => {
+    if (!session) {
+      setMe(null);
+      setMeReady(false);
+      return;
+    }
+    let alive = true;
+    setMeReady(false);
+    supabase
+      .from("app_users")
+      .select("*")
+      .eq("id", session.user.id)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (alive) {
+          setMe((data as AppUser | null) ?? null);
+          setMeReady(true);
+        }
+      });
+    return () => {
+      alive = false;
+    };
+  }, [session]);
 
   const load = useCallback(() => {
     setLoadErr("");
@@ -894,6 +979,9 @@ export default function DashboardClient() {
         onCancel={showSetPw && !mustSetPw ? () => setShowSetPw(false) : undefined}
       />
     );
+  if (!meReady) return <p className="px-4 py-20 text-center text-sm text-muted">계정 확인 중…</p>;
+  if (!me || me.status !== "approved")
+    return <PendingGate me={me} email={session.user.email ?? ""} onSignOut={() => supabase.auth.signOut()} />;
   if (loadErr)
     return <p className="px-4 py-20 text-center text-sm text-rose-600">데이터 조회 실패: {loadErr}</p>;
   if (!scan) return <p className="px-4 py-20 text-center text-sm text-muted">데이터 불러오는 중…</p>;
@@ -978,13 +1066,10 @@ export default function DashboardClient() {
           <Lock size={12} className="shrink-0" aria-hidden /> 관리자 전용 · 외부 공유 금지
         </span>
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => setShowSettings(true)}
-            className="inline-flex items-center gap-1.5 rounded-full border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50"
-            aria-label="설정 — 관리자 계정관리·조치 변경 이력"
-          >
-            <Settings size={12} aria-hidden /> 설정
-          </button>
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600">
+            <span className="break-all font-mono">{me.email}</span>
+            <span className={`rounded-full border px-1.5 py-0.5 ${(USER_ROLE_META[me.role] ?? USER_ROLE_META.general).cls}`}>{(USER_ROLE_META[me.role] ?? USER_ROLE_META.general).label}</span>
+          </span>
           <button
             onClick={() => setShowSetPw(true)}
             className="inline-flex items-center gap-1.5 rounded-full border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50"
@@ -1041,13 +1126,16 @@ export default function DashboardClient() {
         <StatTile label="모니터링 도메인" value={scan.domains.length} unit="개" icon={<Globe size={18} />} accent="#3157a4" sub={scan.domains.join(", ") || "미설정"} />
         <StatTile label="유출 노출 계정" value={acctTotal} unit="계정" icon={<ShieldAlert size={18} />} accent="#be123c" trend={{ label: acctOpen > 0 ? `조치 필요 ${acctOpen}` : "모두 조치됨", dir: acctOpen > 0 ? "down" : "up" }} sub={`조치완료 ${acctDone} · 노출 ${summary.total}건`} />
         <StatTile label="이번 스캔 신규" value={summary.newCount} unit="건" icon={<Sparkles size={18} />} accent="#b45309" trend={{ label: summary.newCount > 0 ? "신규 발견" : "변동 없음", dir: summary.newCount > 0 ? "down" : "neutral" }} sub="직전 대비" />
+        <StatTile label="인포스틸러 감염" value={infoTotal} unit="건" icon={<Bug size={18} />} accent="#7f1d1d" trend={{ label: "도메인 전수", dir: infoTotal > 0 ? "down" : "up" }} sub="Cavalier" />
       </div>
 
-      <Panel title="계열사별 위험 개요" subtitle="회사별 유출 계정 현황" right={<span className="chip chip-neutral"><Globe size={13} className="mr-1 inline" aria-hidden /> {overview.length}개사</span>}>
+      {me.role === "super_admin" && <UserAdminPanel selfId={me.id} />}
+
+      <Panel title="계열사별 위험 개요" subtitle="회사별 유출 계정 · 인포스틸러 감염 통합 현황" right={<span className="chip chip-neutral"><Globe size={13} className="mr-1 inline" aria-hidden /> {overview.length}개사</span>}>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {overview.map((o) => {
-            const dot = o.acctOpen > 0 ? "bg-rose-500" : "bg-teal-500";
-            const risk = o.acctOpen > 0;
+            const dot = o.acctOpen > 0 ? "bg-rose-500" : o.infoTotal > 100 ? "bg-rose-400" : o.infoTotal > 0 ? "bg-amber-500" : "bg-teal-500";
+            const risk = o.acctOpen > 0 || o.infoTotal > 0;
             return (
               <div key={o.domain} className={`rounded-xl border p-4 ${risk ? "border-rose-200 bg-rose-50/40" : "border-slate-200 bg-slate-50"}`}>
                 <div className="flex items-start justify-between gap-2">
@@ -1057,9 +1145,15 @@ export default function DashboardClient() {
                   </div>
                   <span className={`mt-1 inline-flex h-2.5 w-2.5 shrink-0 rounded-full ${dot}`} aria-hidden />
                 </div>
-                <div className="mt-3 rounded-lg bg-white/70 p-2 text-center">
-                  <div className="text-lg font-extrabold text-rose-700">{o.acctTotal}</div>
-                  <div className="text-[10px] text-muted">유출 계정</div>
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <div className="rounded-lg bg-white/70 p-2 text-center">
+                    <div className="text-lg font-extrabold text-rose-700">{o.acctTotal}</div>
+                    <div className="text-[10px] text-muted">유출 계정</div>
+                  </div>
+                  <div className="rounded-lg bg-white/70 p-2 text-center">
+                    <div className="text-lg font-extrabold text-slate-800">{o.infoTotal.toLocaleString()}</div>
+                    <div className="text-[10px] text-muted">인포스틸러</div>
+                  </div>
                 </div>
                 {o.acctTotal > 0 && (
                   <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px]">
@@ -1068,13 +1162,16 @@ export default function DashboardClient() {
                     <span className="text-teal-700">조치 완료 {o.acctDone}</span>
                   </div>
                 )}
+                {o.infoTotal > 0 && (
+                  <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-muted">
+                    <span>인포스틸러 — 임직원 {o.employees}</span><span>·</span><span>사용자 {o.users}</span><span>·</span><span>서드파티 {o.thirdParties}</span>
+                  </div>
+                )}
               </div>
             );
           })}
         </div>
       </Panel>
-
-      <CustomerPiiPanel findings={scan.findings} />
 
       <section className="grid gap-4 lg:grid-cols-2">
         <Panel title="심각도 분포" subtitle="조치 필요(미조치) 기준 — 데이터 분류 위험도">
@@ -1089,65 +1186,9 @@ export default function DashboardClient() {
         <AccountGroupedFindings findings={scan.findings} onChanged={load} />
       </Panel>
 
-      <SourceCodeExposurePanel />
+      <RemediationLogPanel reloadKey={scan.findings.map((f) => `${f.id}:${f.status}:${f.remediatedAt}`).join("|")} />
 
-      {sources.length > 0 && (
-        <Panel title="수집 출처" subtitle="어떤 인텔리전스 소스에서 언제 수집했는지 기록">
-          <div className="hidden overflow-x-auto sm:block">
-            <table className="w-full min-w-[560px] text-sm">
-              <thead>
-                <tr className="border-b border-slate-200 text-left text-xs font-semibold uppercase tracking-wide text-muted">
-                  <th className="px-3 py-2">소스</th><th className="px-3 py-2">종류</th><th className="px-3 py-2">엔드포인트</th><th className="px-3 py-2">수집</th><th className="px-3 py-2">시각</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sources.map((s) => (
-                  <tr key={s.name} className="border-b border-slate-100 last:border-0">
-                    <td className="px-3 py-2 font-semibold text-ink"><Database size={13} className="mr-1 inline text-slate-400" aria-hidden />{s.name}</td>
-                    <td className="px-3 py-2"><span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${s.kind === "infostealer" ? "border-rose-300 bg-rose-100 text-rose-700" : "border-sky-300 bg-sky-100 text-sky-700"}`}>{s.kind === "infostealer" ? "인포스틸러" : "데이터 유출"}</span></td>
-                    <td className="px-3 py-2 font-mono text-[11px] text-muted">{s.endpoint}</td>
-                    <td className="px-3 py-2 text-slate-700">{s.count.toLocaleString()}</td>
-                    <td className="px-3 py-2 font-mono text-[11px] text-muted">{fmtDate(s.scannedAt)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {/* 모바일: 카드 */}
-          <div className="space-y-2 sm:hidden">
-            {sources.map((s) => (
-              <div key={s.name} className="rounded-lg border border-slate-100 bg-slate-50 p-3">
-                <div className="flex items-start justify-between gap-2">
-                  <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-ink"><Database size={13} className="shrink-0 text-slate-400" aria-hidden />{s.name}</span>
-                  <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${s.kind === "infostealer" ? "border-rose-300 bg-rose-100 text-rose-700" : "border-sky-300 bg-sky-100 text-sky-700"}`}>{s.kind === "infostealer" ? "인포스틸러" : "데이터 유출"}</span>
-                </div>
-                <div className="mt-1 break-all font-mono text-[11px] text-muted">{s.endpoint}</div>
-                <div className="mt-1 text-[11px] text-muted">수집 {s.count.toLocaleString()}건 · {fmtDate(s.scannedAt)}</div>
-              </div>
-            ))}
-          </div>
-        </Panel>
-      )}
-
-      <Panel title="스캔 이력" subtitle="최근 스캔별 노출 건수 추이">
-        {historyRecent.length ? (
-          <ul className="grid gap-2 sm:grid-cols-2">
-            {historyRecent.map((h) => (
-              <li key={h.scannedAt} className="flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-sm">
-                <span className="font-mono text-xs text-muted">{fmtDate(h.scannedAt)}</span>
-                <span className="text-slate-700">총 <strong className="text-ink">{h.total}</strong>건
-                  {h.newCount > 0 && <span className="ml-2 rounded-full bg-amber-100 px-1.5 py-0.5 text-[11px] font-bold text-amber-700">신규 {h.newCount}</span>}
-                </span>
-              </li>
-            ))}
-          </ul>
-        ) : <p className="py-6 text-center text-sm text-muted">이력 없음.</p>}
-      </Panel>
-
-      {/* ── 참고 · 인포스틸러 (직접 침해 아닌 고객 단말 감염 중심 · 기본 접힘) ── */}
-      <div className="mt-2 flex items-center gap-2 px-1 text-xs font-bold uppercase tracking-wide text-muted"><Bug size={13} aria-hidden /> 참고 · 인포스틸러</div>
-
-      <Panel collapsible defaultCollapsed title="인포스틸러 점검이란?" subtitle="다크웹 정보탈취 악성코드(인포스틸러) 감염 점검의 개념과 방법">
+      <Panel title="인포스틸러 점검이란?" subtitle="다크웹 정보탈취 악성코드(인포스틸러) 감염 점검의 개념과 방법">
         <div className="grid gap-4 text-sm leading-6 text-slate-700 lg:grid-cols-2">
           <div className="space-y-2.5">
             <p className="flex gap-2"><Bug size={16} className="mt-0.5 shrink-0 text-rose-600" aria-hidden /><span><strong>인포스틸러</strong>는 감염된 PC에서 브라우저에 저장된 비밀번호·쿠키·세션·자동완성·암호화폐 지갑 등을 통째로 탈취해 다크웹에 유통하는 악성코드입니다. 단순 유출과 달리 <strong>로그인 세션 탈취로 MFA(2단계 인증)까지 우회</strong>될 수 있어 위험합니다.</span></p>
@@ -1161,7 +1202,7 @@ export default function DashboardClient() {
         <p className="mt-3 flex gap-2 border-t border-slate-100 pt-3 text-xs text-amber-700"><AlertTriangle size={14} className="mt-0.5 shrink-0" aria-hidden /><span>감염 확인 시: 즉시 비밀번호 재설정 + MFA 재등록 + 해당 단말의 모든 활성 세션 무효화 + 단말 백신 정밀검사/포맷을 권고합니다(세션 쿠키까지 탈취됐을 수 있어 비번 변경만으론 불충분).</span></p>
       </Panel>
 
-      <Panel collapsible defaultCollapsed title="다크웹 인포스틸러 감염 (도메인 전수)" subtitle="악성코드 감염으로 탈취된 다크웹 스틸러 로그. 도메인 전체 집계." right={
+      <Panel title="다크웹 인포스틸러 감염 (도메인 전수)" subtitle="악성코드 감염으로 탈취된 다크웹 스틸러 로그. 도메인 전체 집계." right={
         <div className="flex flex-wrap items-center gap-2">
           <span className="chip chip-neutral"><Bug size={13} className="mr-1 inline" aria-hidden /> 총 {infoTotal.toLocaleString()}건</span>
           <button onClick={() => exportInfostealerCsv(infostealer, hosts)} disabled={!infostealer.length} className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50" title="관제(SOC) 이관용 CSV 다운로드"><Download size={12} aria-hidden /> CSV</button>
@@ -1255,7 +1296,7 @@ export default function DashboardClient() {
       </Panel>
 
       <Panel
-        collapsible defaultCollapsed title="감염 호스트 상세 (피해 단말)"
+        title="감염 호스트 상세 (피해 단말)"
         subtitle="모니터링 계정의 인포스틸러 감염 단말 — 민감정보, 관리자 전용·외부 공유 금지"
         right={<span className="chip chip-neutral"><Monitor size={13} className="mr-1 inline" aria-hidden /> {hosts.length}대 · 사내 {hostsCorpTotal}건</span>}
       >
@@ -1324,7 +1365,7 @@ export default function DashboardClient() {
         )}
       </Panel>
 
-      <Panel collapsible defaultCollapsed title="대응 가이드" subtitle="인포스틸러 감염 유형별 권고 조치 — 발견 시 이렇게 대응합니다">
+      <Panel title="대응 가이드" subtitle="인포스틸러 감염 유형별 권고 조치 — 발견 시 이렇게 대응합니다">
         <div className="space-y-3">
           <div className="rounded-xl border border-rose-200 bg-rose-50/50 p-4">
             <div className="flex flex-wrap items-center gap-2 text-sm font-bold text-rose-800">
@@ -1368,6 +1409,59 @@ export default function DashboardClient() {
         </div>
       </Panel>
 
+      {sources.length > 0 && (
+        <Panel title="수집 출처" subtitle="어떤 인텔리전스 소스에서 언제 수집했는지 기록">
+          <div className="hidden overflow-x-auto sm:block">
+            <table className="w-full min-w-[560px] text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 text-left text-xs font-semibold uppercase tracking-wide text-muted">
+                  <th className="px-3 py-2">소스</th><th className="px-3 py-2">종류</th><th className="px-3 py-2">엔드포인트</th><th className="px-3 py-2">수집</th><th className="px-3 py-2">시각</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sources.map((s) => (
+                  <tr key={s.name} className="border-b border-slate-100 last:border-0">
+                    <td className="px-3 py-2 font-semibold text-ink"><Database size={13} className="mr-1 inline text-slate-400" aria-hidden />{s.name}</td>
+                    <td className="px-3 py-2"><span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${s.kind === "infostealer" ? "border-rose-300 bg-rose-100 text-rose-700" : "border-sky-300 bg-sky-100 text-sky-700"}`}>{s.kind === "infostealer" ? "인포스틸러" : "데이터 유출"}</span></td>
+                    <td className="px-3 py-2 font-mono text-[11px] text-muted">{s.endpoint}</td>
+                    <td className="px-3 py-2 text-slate-700">{s.count.toLocaleString()}</td>
+                    <td className="px-3 py-2 font-mono text-[11px] text-muted">{fmtDate(s.scannedAt)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {/* 모바일: 카드 */}
+          <div className="space-y-2 sm:hidden">
+            {sources.map((s) => (
+              <div key={s.name} className="rounded-lg border border-slate-100 bg-slate-50 p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-ink"><Database size={13} className="shrink-0 text-slate-400" aria-hidden />{s.name}</span>
+                  <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${s.kind === "infostealer" ? "border-rose-300 bg-rose-100 text-rose-700" : "border-sky-300 bg-sky-100 text-sky-700"}`}>{s.kind === "infostealer" ? "인포스틸러" : "데이터 유출"}</span>
+                </div>
+                <div className="mt-1 break-all font-mono text-[11px] text-muted">{s.endpoint}</div>
+                <div className="mt-1 text-[11px] text-muted">수집 {s.count.toLocaleString()}건 · {fmtDate(s.scannedAt)}</div>
+              </div>
+            ))}
+          </div>
+        </Panel>
+      )}
+
+      <Panel title="스캔 이력" subtitle="최근 스캔별 노출 건수 추이">
+        {historyRecent.length ? (
+          <ul className="grid gap-2 sm:grid-cols-2">
+            {historyRecent.map((h) => (
+              <li key={h.scannedAt} className="flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-sm">
+                <span className="font-mono text-xs text-muted">{fmtDate(h.scannedAt)}</span>
+                <span className="text-slate-700">총 <strong className="text-ink">{h.total}</strong>건
+                  {h.newCount > 0 && <span className="ml-2 rounded-full bg-amber-100 px-1.5 py-0.5 text-[11px] font-bold text-amber-700">신규 {h.newCount}</span>}
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : <p className="py-6 text-center text-sm text-muted">이력 없음.</p>}
+      </Panel>
+
       <p className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 px-4 text-center text-[11px] leading-5 text-muted">
         <span className="inline-flex items-center gap-1"><ShieldCheck size={12} className="text-teal-600" aria-hidden /> 합법 인텔리전스 API(XposedOrNot·Hudson Rock·IntelX·LeakCheck) — 다크웹 직접 크롤링 없음</span>
         <span aria-hidden>·</span>
@@ -1375,22 +1469,6 @@ export default function DashboardClient() {
         <span aria-hidden>·</span>
         <span>관리자 인증(RLS) 전용 · 외부 공유 금지</span>
       </p>
-
-      {showSettings && (
-        <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-label="설정">
-          <div className="absolute inset-0 bg-black/50" onClick={() => setShowSettings(false)} aria-hidden />
-          <div className="relative flex h-full w-full max-w-2xl flex-col overflow-y-auto shadow-2xl" style={{ background: "var(--bg)" }}>
-            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-line px-5 py-4" style={{ background: "var(--bg)" }}>
-              <h2 className="flex items-center gap-2 text-lg font-bold text-ink"><Settings size={18} aria-hidden /> 설정</h2>
-              <button onClick={() => setShowSettings(false)} className="rounded-lg p-1.5 text-muted transition hover:bg-slate-100 hover:text-ink" aria-label="닫기"><X size={18} aria-hidden /></button>
-            </div>
-            <div className="space-y-6 p-5">
-              <AdminAccountsPanel currentEmail={session?.user?.email ?? ""} />
-              <RemediationLogPanel reloadKey={scan.findings.map((f) => `${f.id}:${f.status}:${f.remediatedAt}`).join("|")} />
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
