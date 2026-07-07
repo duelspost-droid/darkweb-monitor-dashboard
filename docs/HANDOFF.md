@@ -404,7 +404,10 @@ cd /Users/hk/darkweb-monitor-dashboard && npm run supabase:pull
 
 ---
 
-## 17. 세션 로그 — 2026-07-06 (다중 사용자 로그인 + 슈퍼관리자 사용자 관리)
+## 17. 세션 로그 — 2026-07-06 (다중 사용자 로그인 + 슈퍼관리자 사용자 관리) — ⚠️ 폐기됨, 18절 참조
+
+> ⚠️ **이 절의 설계(app_users/is_approved_user/셀프가입+승인 워크플로)는 18절에서 폐기·원복되었다.**
+> 이미 있던 admin_allowlist(011/012)와 충돌하고 회귀 사고를 냈다. 아래는 무엇을 시도했고 왜 실패했는지의 기록으로만 남긴다 — 재구현 금지, 18절의 "AdminAccountsPanel 확장" 설계를 따를 것.
 
 > 이 절은 세션마다 최신 작업·지시·결정을 누적 기록한다(다른 PC 이어작업용). [[16. 세션 로그]] 다음 세션.
 
@@ -462,3 +465,41 @@ cd /Users/hk/darkweb-monitor-dashboard && npm run supabase:pull
 - [ ] **라이브 동작 검증**: dark.jbax.co.kr에서 실제로 "계정 신청" 폼이 뜨는지, 슈퍼관리자로 로그인 시 "사용자 관리" 패널이 보이는지, 계정 생성·비밀번호 지정이 실제로 동작하는지 브라우저로 확인.
 - [ ] Supabase Auth 설정에서 **가입(Sign up) 허용 여부**와 **이메일 인증 발송 설정**(무료 SMTP 한도 이슈 재확인, [[16. 세션 로그]]의 "관리자 비밀번호 설정 완료 미확인"과 동일 계열 리스크) 점검 — 신청자가 인증 메일을 못 받으면 가입 자체가 막힘.
 - [ ] (이어서) `discovered_at` 최초발견일 보존 개선 — [[16. 세션 로그]] 참조, 아직 미착수.
+
+---
+
+## 18. 세션 로그 — 2026-07-06 (b) (회귀 사고 복구 + 관리자 계정 생성/비밀번호 관리 정식 구현)
+
+> **17절 설계를 폐기하고 다시 만든 결정판.** 이어작업 시 이 절을 정본으로 본다.
+
+### ⚠️ 무슨 사고가 났나 (재발 방지용 기록)
+- 17절에서 만든 `app_users`/`is_approved_user()` 시스템이 **이미 있던 `admin_allowlist`/`is_admin()` 체계(마이그레이션 011·012, 07-05)와 정면 충돌**했다. 같은 이름의 SELECT 정책(`breach_findings_read` 등)을 서로 다른 기준으로 덮어써 버렸다.
+- 더 심각한 것: `DashboardClient.tsx` 를 배포할 때 **오래된 로컬 파일(a483bda 기준)로 전체를 덮어써서**, 07-05에 다른 세션들이 커밋한 작업들(공개 소스코드 노출 PII 패널, 우측 설정 드로어, 인포스틸러 UI 하단 이동, 무음실패 방지 fix, **admin_allowlist 관리 UI `AdminAccountsPanel`** 등)을 통째로 회귀시켰다(커밋 `2c9ed24`).
+- **원인**: 로컬 작업 폴더가 git 체크아웃이 아니라 tar 추출본이라 origin/main보다 42커밋 뒤처져 있었는데, 그걸 모른 채 전체 파일 교체 방식으로 배포함. → **교훈: 배포 전 반드시 `git fetch origin main` 후 최신 여부 확인. 전체 파일 덮어쓰기 대신 최신 원본을 받아 그 위에 패치할 것.**
+
+### ✅ 어떻게 복구했나
+1. `git fetch origin main` 으로 최신 확인(local a483bda ↔ origin ba8e50b, 42커밋 차이).
+2. 회귀 직전 정상 상태 **`468e1d3`** 의 `app/DashboardClient.tsx`(1396줄)를 GitHub API로 받아 로컬 복원. 딸린 파일(`components/ui/Panel.tsx`, `data/security/source_code_exposures.json`, `scripts/monitor_breaches.mjs`, `supabase/functions/scan-breaches/index.ts`, `lib/data/generated/breachMonitor.ts`)도 `git checkout origin/main -- ...` 로 동기화.
+3. **DB 원복**: 마이그레이션 `013_revert_app_users.sql` 작성·적용(Supabase SQL Editor) — SELECT 정책을 `is_admin()`(011 상태)로 복원, `set_remediation` 가드도 `is_admin` 계열로 되돌림(008 원형), 009가 만든 `app_users`/트리거/RPC/헬퍼 DROP. **검증 쿼리로 확인: `breach_findings_read = is_admin()`, `app_users_table_exists = false`, `is_super_admin_fn_exists = false`, `is_admin_fn_exists = true`.**
+4. `app_users` 참조 0건 확인(`grep`), `npm run typecheck` 통과.
+
+### ✅ 정식 구현 (요청 기능: 관리자 페이지에서 계정 직접 생성 + 비밀번호 초기화/지정)
+- **기존 `AdminAccountsPanel`(admin_allowlist 관리 UI)을 확장**했다. 새 시스템을 만들지 않고 이미 있던 패널에 기능만 추가 — 이게 원래 설계 의도와 맞다(allowlist = 데이터 접근 권한, 그 위에 실제 로그인 계정 관리를 얹음).
+  - **추가 폼**: 이메일 + 메모 + **초기 비밀번호(선택, 8자+)**. 비밀번호를 넣으면 allowlist 추가와 동시에 실제 Auth 로그인 계정도 생성.
+  - **행별 버튼 "계정 생성/비밀번호 지정"**: 인라인 입력으로 비밀번호 재설정(초기화). 계정이 없으면 새로 생성, 있으면 비밀번호만 재설정(한 번의 조작으로 처리).
+- **Edge Function `admin-users`** (재설계, 배포 완료 · `verify_jwt=false`):
+  - 권한 확인 기준을 `app_users`→**`admin_allowlist`(is_admin 과 동일 기준, service_role 로 조회)**로 변경.
+  - action: `create_user`(이메일+비번, `email_confirm:true`), `set_password`(이메일로 계정 찾아 재설정), `delete_user`. gotrue 에 이메일 직접조회 API가 없어 `listUsers` 로 찾음(관리자 수 적어 충분).
+  - 본인 대상 비번변경/삭제는 서버에서 차단(자가 잠금 방지).
+- 클라는 `supabase.functions.invoke("admin-users", { body: {...} })` 호출(세션 JWT 자동 첨부).
+
+### 배포/커밋 (모두 main, CI 초록 확인)
+- `0996a30` fix(regression): DashboardClient.tsx 복구(468e1d3 기준) + AdminAccountsPanel 확장(계정생성/비번지정).
+- `acc84ba` fix(db): 013 되돌림 마이그레이션 추가(리포 동기화 — 이미 프로덕션 적용됨).
+- `f070976` feat(edge): admin-users 를 admin_allowlist 기반으로 재설계(리포 동기화 — 이미 Supabase 배포됨).
+- **주의**: `009_user_management.sql` 은 폐기됐지만 회귀 커밋 히스토리로 리포에 남아있을 수 있음 — 013이 그 효과를 무력화하므로 재적용 금지. `013`이 정본.
+
+### 남은 확인 (다음 세션 또는 사용자)
+- [ ] **라이브 기능 검증**: 승인 관리자로 로그인 → "관리자 계정 관리" 패널에서 (a) 이메일+초기비번으로 계정 생성, (b) 행별 "계정 생성/비밀번호 지정"으로 재설정이 실제로 동작하는지 확인. **AI는 비밀번호 입력·계정 생성을 정책상 직접 못 하므로 사용자가 테스트해야 함.**
+- [ ] Edge Function `admin-users` 의 **verify_jwt 가 OFF 유지**되는지 재확인(코드 재배포 시 config 는 별개로 유지되어야 정상이나, 프리플라이트/호출 에러 나면 여기부터 점검).
+- [ ] 17절에서 손댔던 회귀가 **완전히 원복**됐는지: dark.jbax.co.kr 로그인 후 07-05 기능들(PII 노출 패널·설정 드로어·인포스틸러 하단 패널)이 다 보이는지 육안 확인.
