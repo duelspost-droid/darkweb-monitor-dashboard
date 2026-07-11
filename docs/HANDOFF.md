@@ -1,6 +1,6 @@
 # 다크웹 유출 모니터링 대시보드 — 개발 핸드오프 (HANDOFF)
 
-**최종 갱신: 2026-07-06** (직전: 07-03) — 최신 작업은 맨 아래 **17. 세션 로그** 참조.
+**최종 갱신: 2026-07-06** (직전: 07-05) — 최신 작업은 맨 아래 **18. 세션 로그** 참조 (07-04~05 세션은 **16b절**).
 
 > ⚠️ **공개 repo 커밋됨 — 시크릿 값 기재 금지(위치만)**
 > 이 문서는 Public 저장소(`duelspost-droid/darkweb-monitor-dashboard`)에 커밋된다. 비밀번호·API 키·Supabase `service_role`·anon JWT·`SCAN_SECRET`·DB 비밀번호 등 **실제 시크릿 값은 어떤 형태로도 기재하지 않는다.** 변수 이름과 보관 위치만 적고, 값이 필요한 자리는 `{URL}`, `{ANON}` 같은 플레이스홀더로 표기한다.
@@ -401,6 +401,34 @@ cd /Users/hk/darkweb-monitor-dashboard && npm run supabase:pull
 - [x] 진단 DB 확인, 코드 패치, typecheck 통과.
 - [x] **배포 완료**(크롬으로 GitHub 웹 편집 → `app/DashboardClient.tsx` main 커밋 `c40093f` → CI #59 성공 → 라이브 검증: 조치 필요 2 재부상).
 - [ ] `discovered_at` **최초발견일 보존** 개선: Edge Function upsert에서 discovered_at을 신규 행만 세팅하고 기존 행은 보존(예: upsert payload에서 discovered_at 제외 + 신규 삽입 시에만 세팅, 또는 first_seen 별도 컬럼). is_new 기반 알림/타임라인 정확도용.
+
+---
+
+## 16b. 세션 로그 — 2026-07-04~05 (다크SOC테마 · 소스코드노출 · 설정드로어 · 금융PII탐지)
+
+> ⚠️ 이 세션(07-04~05)은 다른 PC의 07-06 작업(17·18절)보다 먼저였으나 HANDOFF 기록이 누락돼 사후 보강함. 코드는 전부 origin 반영됨(커밋 c0b96b8…8cb7c04). 상세는 `git show <hash>`.
+
+### 사용자 지시(요지, 시간순)
+다크웹 UI 다크SOC테마+시안액센트 → 검증·배포 → 관리자 계정관리(admin_allowlist, 마이그012) → "GitHub 등 소스코드에서 JB 노출 전수" OSINT → "배치 참고+홈 조치사항" → "코드개선"×2 → "인포스틸러 하단 접힘·가이드 분리" → "관리자관리·로그를 우측상단 톱니바퀴로, 인포스틸러 KPI 제거" → "CI·DI 등 금융 고객정보 전부 추출" → "실동작 하게 크롬에서" → "검색 넓혀·전용패널" → "이력 저장".
+
+### 완료 작업 (커밋)
+- **다크 SOC 테마**(`c0b96b8`): globals.css 전면 다크(#0a0e15/시안#22d3ee) + 오버라이드 레이어(literal 유틸 `!important` 리매핑 → .tsx 무수정). tailwind.config 다크토큰.
+- **관리자 계정관리**(`d40029d`, 마이그 **012**): `AdminAccountsPanel`(admin_allowlist CRUD) + RLS(자가잠금 방지). ⚠️07-06에 admin-users Edge 함수로 확장됨(18절).
+- **공개 소스코드 노출**(`8186711`): `data/security/source_code_exposures.json`(10건) + `SourceCodeExposurePanel`. **배치통합**(`243391e`): `collectCuratedExposures`(Node+Edge) 매 스캔 재적재.
+- **코드개선**(`f48a428`): infostealer_hosts 무음실패→warn · 모바일반응형 · Node fetchT타임아웃. **Edge 로깅**(`005a900`): 알림/카탈로그/Cavalier 실패 로깅.
+- **인포스틸러 강등**(`b20bd13`): `Panel` collapsible prop 신설 → 인포스틸러 4패널 하단 이동+기본접힘. **설정 드로어+KPI정리**(`5bbe847`): ⚙설정 드로어(관리자관리+조치이력 이동), 인포스틸러 KPI/개요 제거.
+- **금융 고객 개인정보(PII) 탐지**(`a1e2b78`·`a2b4b58`): `classifyFinancialPii`(Node+Edge) — CI(연계정보)·DI·주민번호/외국인번호·카드·계좌·여권·면허·전화 **카테고리만** 탐지, **⚠️실제 값 절대 미저장**(PIPA·전자금융). 주민번호 모듈러11·카드 Luhn 자체검증, CI/DI/여권/면허/계좌 키워드게이팅. `collectGithub`이 검색 히트 파일 내용 fetch→분류→PII시 critical finding. **검색확장+패널**(`8e7586b`·`8cb7c04`): 검색 5키워드(password·주민번호·연계정보·계좌번호·여권번호), `CustomerPiiPanel`(전용강조/노출없음 안심상태).
+
+### 배포·운영 절차 (필수)
+- **프런트**: push → Pages 자동(~2-3분). **Edge 재배포(수동)**: Chrome 대시보드 `.../functions/scan-breaches/code` monaco `setValue(await fetch('<GitHub raw>').then(r=>r.text()))` → "Deploy updates" → confirm. ⚠️Supabase 데이터계층 간헐저하로 monaco 자주 안뜸 → 함수목록 워밍업·새탭·재시도로 복구창 잡기.
+- **스캔 즉시트리거**: SQL Editor `select net.http_post(url:=(select decrypted_secret from vault.decrypted_secrets where name='project_url')||'/functions/v1/scan-breaches', headers:=jsonb_build_object('x-scan-secret',(select decrypted_secret from vault.decrypted_secrets where name='scan_secret'),'Content-Type','application/json'), body:='{}'::jsonb);`. ⚠️**auto모드 분류기가 에이전트의 Run클릭·vault SELECT를 차단** → **사람이 Run**. 확인은 일반 SELECT(`... where source='고객정보 노출 (GitHub)'`)로.
+- **Edge 구문검증**: deno 없음 → `npx esbuild ... --loader:.ts=ts`(타입 미검사, 런타임 무영향). **CRLF**: 대량이동은 node스크립트, 소규모는 Edit. **Turbopack**: app/·components/ .tsx 대괄호 정규식 금지(콜렉터 무관).
+
+### 시크릿 현황 (Edge Secrets, 값 미기재) — 2026-07-05 확인
+설정됨: `SCAN_SECRET`·`MONITORED_EMAILS`·`MONITORED_DOMAINS`·`GITHUB_TOKEN`(→PII/소스코드 스캔 실동작 조건 충족). 선택(미설정시 skip): HIBP/INTELX/LEAKCHECK/NOTIFY_WEBHOOK_URL/RESEND. 실측 트리거 2회 status ok, github_ptr 2→4(검색확장 작동)·pii 0(공개코드에 고객PII 노출 없음=정상).
+
+### 남은 TODO (사람 조치)
+임직원 이메일4(`sej@wooricap.com`최우선·`hantj@`·`KJB736@kjbank.com`·`ljj282@wooricap.com`) MONITORED_EMAILS 추가 · 레포 takedown+통지 · kjbank.co.kr XSS(OBB:256489) 패치확인 · NOTIFY_WEBHOOK_URL 등록. (선택)유출필드 CI/DI 승격·discovered_at 보존.
 
 ---
 
