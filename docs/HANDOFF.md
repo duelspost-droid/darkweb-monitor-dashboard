@@ -1,6 +1,6 @@
 # 다크웹 유출 모니터링 대시보드 — 개발 핸드오프 (HANDOFF)
 
-**최종 갱신: 2026-07-06** (직전: 07-05) — 최신 작업은 맨 아래 **18. 세션 로그** 참조 (07-04~05 세션은 **16b절**).
+**최종 갱신: 2026-07-06** (직전: 07-05) — 최신 작업은 맨 아래 **19. 세션 로그**(노출 건별 조치 + 개인정보 탐지 확장) 참조. 07-04~05 세션은 **16b절**.
 
 > ⚠️ **공개 repo 커밋됨 — 시크릿 값 기재 금지(위치만)**
 > 이 문서는 Public 저장소(`duelspost-droid/darkweb-monitor-dashboard`)에 커밋된다. 비밀번호·API 키·Supabase `service_role`·anon JWT·`SCAN_SECRET`·DB 비밀번호 등 **실제 시크릿 값은 어떤 형태로도 기재하지 않는다.** 변수 이름과 보관 위치만 적고, 값이 필요한 자리는 `{URL}`, `{ANON}` 같은 플레이스홀더로 표기한다.
@@ -531,3 +531,33 @@ cd /Users/hk/darkweb-monitor-dashboard && npm run supabase:pull
 - [ ] **라이브 기능 검증**: 승인 관리자로 로그인 → "관리자 계정 관리" 패널에서 (a) 이메일+초기비번으로 계정 생성, (b) 행별 "계정 생성/비밀번호 지정"으로 재설정이 실제로 동작하는지 확인. **AI는 비밀번호 입력·계정 생성을 정책상 직접 못 하므로 사용자가 테스트해야 함.**
 - [ ] Edge Function `admin-users` 의 **verify_jwt 가 OFF 유지**되는지 재확인(코드 재배포 시 config 는 별개로 유지되어야 정상이나, 프리플라이트/호출 에러 나면 여기부터 점검).
 - [ ] 17절에서 손댔던 회귀가 **완전히 원복**됐는지: dark.jbax.co.kr 로그인 후 07-05 기능들(PII 노출 패널·설정 드로어·인포스틸러 하단 패널)이 다 보이는지 육안 확인.
+
+---
+
+## 19. 세션 로그 — 2026-07-06 (c) (노출 건별 조치 + 개인정보 탐지 확장)
+
+> 18절(다중사용자/슈퍼관리자) 이후 이어진 세션. 소스코드·개인정보 노출을 계정 유출처럼 **건별 조치**하게 만들고, 개인정보 탐지 항목을 고유식별정보 포함 대부분으로 확장.
+
+### 사용자 지시(요지)
+- "인터페이스 정리. 소스코드 유출·개인정보 유출은 처리(조치)가 안되잖어" → 노출건 **건별 조치** 추가 + 패널 정리.
+- "둘(검증 low 2건) 이어서" → 조치 RPC 하드닝(015).
+- "개인정보 노출점검은 다크웹·github 모두 찾는거지? 고유식별정보 포함 개인정보 대부분 찾게" → 커버리지 답변 + 항목 확장.
+- "이력 반영" (이 절).
+
+### 완료 작업 (커밋)
+- **노출 건별 조치**(`93d3835`·`6a74414`, 마이그 **014** `set_remediation_by_id` 적용완료): 소스코드/개인정보 노출은 `account_masked='*@domain'` 을 공유 → 계정단위 `set_remediation` 부적합. **finding_id 단위 조치 RPC**(is_admin 게이트, status UPDATE+remediation_log). 프런트: `FindingRemediation` 컴포넌트(조치완료/이상없음/원복+메모) 를 `CustomerPiiPanel`·`SourceCodeExposurePanel` 에 추가. SourceCode 는 정적 `data/security/source_code_exposures.json` 상세(노출내용·권고조치) 유지 + breach_findings(source='공개 소스코드 점검 (수동 큐레이션)') 를 **reference_url 로 매칭**(SQL 로 8건 실측확인 — 정적 url==reference_url), 참고성(info/reviewed) 2건은 '참고'. 두 외부노출 패널 인접배치. 렌더에 onChanged={load}.
+- **조치 RPC 하드닝**(`747d773`, 마이그 **015** 적용완료): (a) 계정단위 `set_remediation` 에 `is_admin()` 게이트 추가(기존엔 authenticated 면 호출 가능, SECURITY DEFINER 라 RLS 우회 → 방어심층). (b) `set_remediation_by_id` 감사로그를 공유 account_masked 대신 **breach_title**(레포/건 식별, 이메일값 아님)로 적재 + 미존재 finding_id RAISE. CREATE OR REPLACE 멱등, 로그인 관리자 무영향.
+- **개인정보 탐지 확장**(`0d83200`, Edge 재배포 완료): `classifyFinancialPii`(Node+Edge)에 **이메일**(예시/플레이스홀더 도메인·로컬 제외)·**주소**(시도+시군구+동/로 앵커)·**생년월일**(키워드게이팅)·**성명**(성명/이름/예금주/name 키워드게이팅+한글2~4자) 추가. 고유식별정보 4종(주민번호·외국인번호·여권·면허)은 기존. CustomerPiiPanel 부제에 고유식별정보/개인정보/금융정보 커버리지 명시. 값 미저장 유지.
+
+### 커버리지 (사용자 질문 답변)
+- **GitHub/개발자 저장소**: 파일 내용을 **값 단위로 전문 스캔**(classifyFinancialPii, 검색 5키워드 히트 파일 fetch→분류).
+- **다크웹/유출**: 합법 인텔 API(XON·HIBP·LeakCheck·IntelX·HudsonRock·COMB)로 **유출 여부 + 노출 카테고리**(주민번호 등) 탐지. **원본 덤프 직접 크롤링은 미구현**(PIPA·정보통신망법 리스크, Tor 설계문서만). 다크웹 값단위 스캔 아님 = 카테고리 단위.
+
+### 배포/운영 메모 (다른 PC용)
+- **마이그레이션 적용(Chrome)**: SQL Editor 에 monaco `setValue(atob(<ASCII DDL base64>))` 주입(한글주석은 제거해 ASCII 로, atob Latin1 안전) → **사용자가 Run**(⚠️ auto모드 분류기가 에이전트의 프로덕션 mutation Run·vault SELECT 차단). 적용 확인은 결과 "Success. No rows returned" 또는 일반 SELECT.
+- **Edge 재배포**: 이번에도 Supabase 데이터계층 간헐 저하로 monaco 자주 안뜸(탭 title 이 프로젝트명으로 해석 안 되고 "Supabase" 에서 멈춤) → 사용자가 자기 브라우저에서 Code 탭 뜨는 것 확인해준 순간 raw 주입 성공.
+
+### 남은 확인/후속
+- [ ] 라이브(로그인) 검증: 두 노출 패널의 "조치하기" 실동작(조치완료→상태변경·감사로그), 확장된 PII 탐지가 다음 스캔에 잡히는지.
+- [ ] (선택) 다크웹 소스 필드매핑(LeakCheck/HIBP)에 고유식별정보 분류 촘촘화.
+- [ ] 015 감사로그가 노출건을 breach_title 로 남기는지 '조치 변경 이력'에서 확인.
