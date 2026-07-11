@@ -1197,9 +1197,8 @@ export default function DashboardClient() {
         </div>
       </Panel>
 
-      <CustomerPiiPanel findings={scan.findings} onChanged={load} />
-
-      <SourceCodeExposurePanel findings={scan.findings} onChanged={load} />
+      {/* ── 조치 대상 (유출 계정 · 개인정보 · 소스코드 노출) ── */}
+      <div className="mt-2 flex items-center gap-2 px-1 text-xs font-bold uppercase tracking-wide text-muted"><ShieldAlert size={13} aria-hidden /> 조치 대상</div>
 
       <section className="grid gap-4 lg:grid-cols-2">
         <Panel title="심각도 분포" subtitle="조치 필요(미조치) 기준 — 데이터 분류 위험도">
@@ -1214,8 +1213,21 @@ export default function DashboardClient() {
         <AccountGroupedFindings findings={scan.findings} onChanged={load} />
       </Panel>
 
+      <CustomerPiiPanel findings={scan.findings} onChanged={load} />
+
+      <SourceCodeExposurePanel findings={scan.findings} onChanged={load} />
+
+      {/* ── 배치 · 수집 현황 (매일 자정 자동 스캔) ── */}
+      <div className="mt-2 flex items-center gap-2 px-1 text-xs font-bold uppercase tracking-wide text-muted"><Database size={13} aria-hidden /> 배치 · 수집 현황</div>
+      <p className="flex flex-wrap items-center gap-x-2 gap-y-1 px-1 text-[11px] text-muted">
+        <span className="inline-flex items-center gap-1"><CalendarClock size={12} aria-hidden /> 매일 자정(KST) Supabase 자동 배치</span>
+        <span aria-hidden>·</span><span>최근 스캔 {fmtDate(scan.generatedAt)}</span>
+        <span aria-hidden>·</span><span>소스 {sources.length}종</span>
+        <span aria-hidden>·</span><span className={scan.status === "ok" ? "font-semibold text-teal-700" : "font-semibold text-rose-700"}>상태 {scan.status === "ok" ? "정상" : scan.status}</span>
+      </p>
+
       {sources.length > 0 && (
-        <Panel title="수집 출처" subtitle="어떤 인텔리전스 소스에서 언제 수집했는지 기록">
+        <Panel title="수집 출처" subtitle="이번 배치가 조회한 인텔리전스 소스별 수집 건수·시각">
           <div className="hidden overflow-x-auto sm:block">
             <table className="w-full min-w-[560px] text-sm">
               <thead>
