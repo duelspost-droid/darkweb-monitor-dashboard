@@ -734,6 +734,23 @@ async function sbGetExistingIds(): Promise<Set<string>> {
   const rows = await res.json();
   return new Set(rows.map((r: { finding_id: string }) => r.finding_id));
 }
+// 영속 first-seen(016). is_new 를 breach_findings(churn) 대신 finding_seen(append-only) 기준으로.
+async function sbGetSeenIds(): Promise<Set<string>> {
+  const res = await fetchT(`${SUPABASE_URL}/rest/v1/finding_seen?select=finding_id&limit=100000`, { headers: sbHeaders });
+  if (!res.ok) return new Set();
+  const rows = await res.json();
+  return new Set(rows.map((r: { finding_id: string }) => r.finding_id));
+}
+async function sbInsertSeen(ids: string[]) {
+  const uniq = [...new Set(ids)].filter(Boolean);
+  if (!uniq.length) return;
+  const res = await fetchT(`${SUPABASE_URL}/rest/v1/finding_seen?on_conflict=finding_id`, {
+    method: "POST",
+    headers: { ...sbHeaders, Prefer: "resolution=ignore-duplicates,return=minimal" },
+    body: JSON.stringify(uniq.map((finding_id) => ({ finding_id }))),
+  });
+  if (!res.ok) console.warn(`finding_seen insert HTTP ${res.status}`);
+}
 async function sbUpsert(rows: unknown[]) {
   if (!rows.length) return;
   const res = await fetchT(`${SUPABASE_URL}/rest/v1/breach_findings?on_conflict=finding_id`, {
@@ -802,6 +819,7 @@ Deno.serve(async (req) => {
   let primaryCount = 0;
   const provenanceExtra: { name: string; kind: string; endpoint: string; count: number; scannedAt: string }[] = [];
   let infostealerHosts: InfostealerHostRow[] = [];
+  let prevBreachCount = 0; // 직전 breach_findings 건수 — 부분 스캔 가드용(stale-delete 스킵 판단)
 
   try {
     if (HIBP_API_KEY && MONITORED_DOMAINS.length) {
@@ -886,8 +904,9 @@ Deno.serve(async (req) => {
     const byId = new Map<string, RawFinding>();
     for (const f of findings) if (!byId.has(f.finding_id)) byId.set(f.finding_id, f);
     findings = [...byId.values()];
-    const existing = await sbGetExistingIds();
-    for (const f of findings) f.is_new = !existing.has(f.finding_id);
+    prevBreachCount = (await sbGetExistingIds()).size;  // 부분 스캔 가드용(직전 DB 건수)
+    const seen = await sbGetSeenIds();                    // is_new 판정용(영속)
+    for (const f of findings) f.is_new = !seen.has(f.finding_id);
   }
 
   // 적재 (정상 스캔만 DB 갱신; 오류 시 기존 데이터 보존)
@@ -914,7 +933,13 @@ Deno.serve(async (req) => {
         last_scan_tag: scanTag,
       }));
       await sbUpsert(rows);
-      await sbDeleteStale(scanTag);
+      await sbInsertSeen(findings.map((f) => f.finding_id)); // 영속 first-seen 갱신(is_new 안정화)
+      // 부분 스캔(직전 대비 수집 급감) 의심 시 stale-delete 스킵 — 유출이 삭제됐다 재등장하며 목록 churn·신규 반복 방지.
+      if (prevBreachCount === 0 || findings.length >= prevBreachCount * 0.7) {
+        await sbDeleteStale(scanTag);
+      } else {
+        console.warn(`[scan] 부분 스캔 의심(수집 ${findings.length} < 직전 ${prevBreachCount}×0.7) — stale-delete 스킵, 기존 findings 보존`);
+      }
     } catch (e) {
       status = "error";
       note = (note ? note + " | " : "") + `적재 실패: ${(e as Error).message}`;
