@@ -691,69 +691,125 @@ const SC_SEV: Record<string, { label: string; cls: string }> = {
   info: { label: "정보", cls: "text-sky-700" },
 };
 type ScExposure = { id: string; type: string; severity: string; institution: string; domain: string; subject: string; repo: string; url: string; exposure: string; action: string; status: string };
-// 고객 개인정보 노출 — 공개 소스코드 스캔에서 탐지된 CI/DI/주민번호/카드 등(실제 값 미저장, 유형·위치만).
+// 건별(finding_id) 조치 컨트롤 — 소스코드/개인정보 노출처럼 계정 공유 노출건을 개별 처리.
+// set_remediation_by_id RPC(마이그 014). 접힘 상태로 두고 '조치' 클릭 시 펼침.
+function FindingRemediation({ findingId, status, note, by, at, suggestion, onChanged }:
+  { findingId: string; status: string; note?: string; by?: string; at?: string; suggestion?: string; onChanged: () => void }) {
+  const [draft, setDraft] = useState(note ?? "");
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
+  const [open, setOpen] = useState(false);
+  const cur = STATUS_META[status] ?? STATUS_META.open;
+  async function apply(s: string) {
+    setBusy(s); setErr("");
+    const { error } = await supabase.rpc("set_remediation_by_id", { p_finding_id: findingId, p_status: s, p_note: draft || null });
+    setBusy("");
+    if (error) setErr("저장 실패: " + error.message); else { setOpen(false); onChanged(); }
+  }
+  return (
+    <div className="mt-2 border-t border-slate-200/70 pt-2">
+      <div className="flex flex-wrap items-center gap-2 text-[11px]">
+        <span className="font-semibold text-muted">조치</span>
+        <span className={`rounded-full border px-2 py-0.5 font-semibold ${cur.cls}`}>{cur.label}</span>
+        {by && at && <span className="text-muted">· {by} · {fmtDate(at)}</span>}
+        {note && !open && <span className="min-w-0 truncate text-muted" title={note}>· {note}</span>}
+        <button onClick={() => setOpen((o) => !o)} className="ml-auto shrink-0 rounded-md border border-slate-300 px-2 py-0.5 font-semibold text-slate-600 hover:bg-slate-100">{open ? "닫기" : "조치하기"}</button>
+      </div>
+      {open && (
+        <div className="mt-2">
+          {suggestion ? <div className="mb-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] leading-5 text-amber-900"><b>조치의견:</b> {suggestion}</div> : null}
+          <textarea value={draft} onChange={(e) => setDraft(e.target.value)} rows={2} placeholder="조치 내역/메모 (예: 레포 소유자 삭제요청·직원 통지 / 또는 '오탐 — 이상없음' 사유)" className="mb-2 w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs outline-none focus:border-rose-400" />
+          <div className="flex flex-wrap items-center gap-2">
+            <button onClick={() => apply("remediated")} disabled={!!busy} className="rounded-lg bg-teal-600 px-3 py-1 text-xs font-bold text-white hover:bg-teal-700 disabled:opacity-50">{busy === "remediated" ? "저장…" : "조치완료"}</button>
+            <button onClick={() => apply("dismissed")} disabled={!!busy} className="rounded-lg bg-sky-600 px-3 py-1 text-xs font-bold text-white hover:bg-sky-700 disabled:opacity-50">{busy === "dismissed" ? "저장…" : "이상없음"}</button>
+            <button onClick={() => apply("open")} disabled={!!busy} className="rounded-lg border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-100 disabled:opacity-50">{busy === "open" ? "저장…" : "미조치로"}</button>
+            {err && <span className="self-center text-[11px] font-semibold text-rose-600">{err}</span>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// 소스코드·개인정보 노출 finding 의 조치 대상 필드(계정유출과 별도로 건별 조치).
+type RemediableFinding = { id: string; source: string; breachTitle: string; dataClasses: string[]; severity: string; referenceUrl?: string; status?: string; remediationNote?: string; remediatedBy?: string; remediatedAt?: string };
+
+// 고객 개인정보 노출 — 공개 소스코드 스캔에서 탐지된 CI/DI/주민번호/카드 등(실제 값 미저장, 유형·위치만) + 건별 조치.
 const PII_SEV_STYLE: Record<string, string> = {
   critical: "border-rose-300 bg-rose-100 text-rose-700",
   high: "border-amber-300 bg-amber-100 text-amber-700",
   medium: "border-sky-300 bg-sky-100 text-sky-700",
   low: "border-slate-300 bg-slate-100 text-slate-600",
 };
-type PiiFinding = { id: string; source: string; breachTitle: string; dataClasses: string[]; severity: string; referenceUrl?: string };
-function CustomerPiiPanel({ findings }: { findings: PiiFinding[] }) {
+function CustomerPiiPanel({ findings, onChanged }: { findings: RemediableFinding[]; onChanged: () => void }) {
   const pii = findings.filter((f) => f.source === "고객정보 노출 (GitHub)");
+  const openCount = pii.filter((f) => (f.status ?? "open") === "open").length;
+  const sorted = [...pii].sort((a, b) => ((a.status ?? "open") === "open" ? 0 : 1) - ((b.status ?? "open") === "open" ? 0 : 1));
   return (
     <Panel
       title="고객 개인정보 노출 (공개 소스코드)"
-      subtitle="공개 GitHub 코드에서 CI·DI·주민번호·카드 등 고객 개인정보가 탐지된 건 — 실제 값은 저장하지 않고 유형·위치만 기록"
+      subtitle="공개 GitHub 코드에서 CI·DI·주민번호·카드 등 고객 개인정보가 탐지된 건 — 실제 값은 저장하지 않고 유형·위치만 기록. 건별로 조치하세요."
       right={pii.length
-        ? <span className="inline-flex items-center gap-1 rounded-full border border-rose-300 bg-rose-100 px-3 py-1 text-xs font-bold text-rose-700"><ShieldAlert size={13} aria-hidden /> {pii.length}건 · 즉시 조치</span>
+        ? <span className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-bold ${openCount ? "border-rose-300 bg-rose-100 text-rose-700" : "border-teal-200 bg-teal-50 text-teal-700"}`}><ShieldAlert size={13} aria-hidden /> 조치 필요 {openCount} / 총 {pii.length}</span>
         : <span className="inline-flex items-center gap-1 rounded-full border border-teal-200 bg-teal-50 px-3 py-1 text-xs font-bold text-teal-700"><ShieldCheck size={13} aria-hidden /> 노출 없음</span>}
     >
       {pii.length === 0 ? (
         <p className="flex items-center gap-2 py-3 text-sm text-muted"><ShieldCheck size={16} className="shrink-0 text-teal-600" aria-hidden /> 현재 공개 소스코드에서 탐지된 고객 개인정보 노출이 없습니다. 매 스캔 자동 점검합니다.</p>
       ) : (
         <ul className="space-y-2">
-          {pii.map((f) => (
-            <li key={f.id} className="rounded-xl border border-rose-300 bg-rose-50 p-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${PII_SEV_STYLE[f.severity] ?? PII_SEV_STYLE.high}`}>{f.severity === "critical" ? "심각" : f.severity === "high" ? "높음" : f.severity}</span>
-                <span className="min-w-0 break-all font-mono text-sm font-semibold text-ink">{f.breachTitle}</span>
-                {f.referenceUrl ? <a href={f.referenceUrl} target="_blank" rel="noreferrer" className="ml-auto inline-flex shrink-0 items-center gap-1 font-mono text-[11px] text-sky-600 hover:underline">열기 <span aria-hidden>↗</span></a> : null}
-              </div>
-              <div className="mt-1.5 flex flex-wrap gap-1">
-                {f.dataClasses.map((c) => <span key={c} className="rounded-full border border-rose-200 bg-white/60 px-2 py-0.5 text-[11px] font-semibold text-rose-700">{c}</span>)}
-              </div>
-            </li>
-          ))}
+          {sorted.map((f) => {
+            const isOpen = (f.status ?? "open") === "open";
+            return (
+              <li key={f.id} className={`rounded-xl border p-3 ${isOpen ? "border-rose-300 bg-rose-50" : "border-slate-200 bg-slate-50 opacity-80"}`}>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${PII_SEV_STYLE[f.severity] ?? PII_SEV_STYLE.high}`}>{f.severity === "critical" ? "심각" : f.severity === "high" ? "높음" : f.severity}</span>
+                  <span className="min-w-0 break-all font-mono text-sm font-semibold text-ink">{f.breachTitle}</span>
+                  {f.referenceUrl ? <a href={f.referenceUrl} target="_blank" rel="noreferrer" className="ml-auto inline-flex shrink-0 items-center gap-1 font-mono text-[11px] text-sky-600 hover:underline">열기 <span aria-hidden>↗</span></a> : null}
+                </div>
+                <div className="mt-1.5 flex flex-wrap gap-1">
+                  {f.dataClasses.map((c) => <span key={c} className="rounded-full border border-rose-200 bg-white/60 px-2 py-0.5 text-[11px] font-semibold text-rose-700">{c}</span>)}
+                </div>
+                <FindingRemediation findingId={f.id} status={f.status ?? "open"} note={f.remediationNote} by={f.remediatedBy} at={f.remediatedAt} suggestion="해당 레포 즉시 takedown 요청 + 유출 고객 통지·보호. 실제 값은 시스템에 미저장(유형·위치만)." onChanged={onChanged} />
+              </li>
+            );
+          })}
         </ul>
       )}
-      <p className="mt-3 flex gap-2 border-t border-slate-100 pt-3 text-[11px] leading-5 text-amber-700"><Info size={13} className="mt-0.5 shrink-0 text-sky-500" aria-hidden /><span>탐지 원칙: 실제 값(CI/DI/주민번호 등)은 저장·표시하지 않고 <b>유형·위치만</b> 기록(PIPA·전자금융감독규정). 발견 시 해당 레포 즉시 takedown + 유출 고객 통지·보호.</span></p>
+      <p className="mt-3 flex gap-2 border-t border-slate-100 pt-3 text-[11px] leading-5 text-amber-700"><Info size={13} className="mt-0.5 shrink-0 text-sky-500" aria-hidden /><span>탐지 원칙: 실제 값(CI/DI/주민번호 등)은 저장·표시하지 않고 <b>유형·위치만</b> 기록(PIPA·전자금융감독규정).</span></p>
     </Panel>
   );
 }
 
-function SourceCodeExposurePanel() {
+function SourceCodeExposurePanel({ findings, onChanged }: { findings: RemediableFinding[]; onChanged: () => void }) {
   const data = sourceCodeExposures as { scannedAt: string; source: string; findings: ScExposure[] };
-  const findings = data.findings ?? [];
-  const openCount = findings.filter((f) => f.status === "open").length;
+  const items = data.findings ?? [];
+  // 큐레이션 정적 항목 ↔ 배치 breach_findings(source='공개 소스코드 점검 (수동 큐레이션)') 를 reference_url 로 매칭.
+  // → 정적 항목의 풍부한 상세(노출내용·권고조치)를 유지하면서, 매칭된 건은 건별 조치(status) 가능.
+  const dbByUrl = new Map<string, RemediableFinding>();
+  for (const f of findings) if (f.source === "공개 소스코드 점검 (수동 큐레이션)" && f.referenceUrl) dbByUrl.set(f.referenceUrl, f);
+  const openCount = [...dbByUrl.values()].filter((f) => (f.status ?? "open") === "open").length;
   return (
-    <Panel title="공개 소스코드 노출 (GitHub)" subtitle="자사 도메인·계정이 공개 소스코드/코드검색에 노출된 건 + 권고 조치" right={<span className="chip chip-neutral">조치 필요 {openCount} / 총 {findings.length}</span>}>
-      <p className="mb-3 flex gap-2 text-[11px] leading-5 text-muted"><Info size={13} className="mt-0.5 shrink-0 text-sky-500" aria-hidden /><span>자사 방어적 OSINT(GitHub 코드검색 + 레포 딥다이브). 점검일 {data.scannedAt}. 실 시크릿(.env/키)은 미검출 — 직원 이메일 PII가 우선 조치 대상입니다.</span></p>
+    <Panel title="공개 소스코드 노출 (GitHub)" subtitle="자사 도메인·계정이 공개 소스코드/코드검색에 노출된 건 + 권고 조치 — 건별로 조치하세요" right={<span className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-bold ${openCount ? "border-rose-300 bg-rose-100 text-rose-700" : "border-teal-200 bg-teal-50 text-teal-700"}`}>조치 필요 {openCount} / 조치대상 {dbByUrl.size}</span>}>
+      <p className="mb-3 flex gap-2 text-[11px] leading-5 text-muted"><Info size={13} className="mt-0.5 shrink-0 text-sky-500" aria-hidden /><span>자사 방어적 OSINT(GitHub 코드검색 + 레포 딥다이브). 점검일 {data.scannedAt}. 실 시크릿(.env/키)은 미검출 — 직원 이메일 PII가 우선 조치 대상입니다. (참고성 항목은 조치 대상 아님)</span></p>
       <ul className="space-y-2">
-        {findings.map((f) => {
+        {items.map((f) => {
           const t = SC_TYPE[f.type] ?? SC_TYPE.config;
           const s = SC_SEV[f.severity] ?? SC_SEV.low;
+          const db = dbByUrl.get(f.url);
+          const isOpen = db ? (db.status ?? "open") === "open" : false;
           return (
-            <li key={f.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <li key={f.id} className={`rounded-xl border p-3 ${db && isOpen ? "border-rose-200 bg-rose-50/50" : "border-slate-200 bg-slate-50"}`}>
               <div className="flex flex-wrap items-center gap-2">
                 <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${t.cls}`}>{t.label}</span>
                 <span className="min-w-0 break-all font-mono text-sm font-semibold text-ink">{f.subject}</span>
                 <span className="text-[11px] text-muted">· {f.institution}</span>
-                <span className={`ml-auto text-[11px] font-semibold ${s.cls}`}>{s.label}{f.status === "reviewed" ? " · 확인됨" : ""}</span>
+                <span className={`ml-auto text-[11px] font-semibold ${s.cls}`}>{s.label}{!db ? " · 참고" : ""}</span>
               </div>
               <p className="mt-1.5 text-[12px] leading-5 text-slate-700">{f.exposure}</p>
               <a href={f.url} target="_blank" rel="noreferrer" className="mt-1.5 inline-flex items-center gap-1 break-all font-mono text-[11px] text-sky-600 hover:underline">{f.repo} <span aria-hidden>↗</span></a>
-              <p className="mt-1.5 flex gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] leading-5 text-amber-900"><ShieldCheck size={12} className="mt-0.5 shrink-0" aria-hidden /><span><b>권고 조치:</b> {f.action}</span></p>
+              {db
+                ? <FindingRemediation findingId={db.id} status={db.status ?? "open"} note={db.remediationNote} by={db.remediatedBy} at={db.remediatedAt} suggestion={f.action} onChanged={onChanged} />
+                : <p className="mt-1.5 flex gap-1.5 rounded-lg border border-slate-200 bg-white/60 px-2.5 py-1.5 text-[11px] leading-5 text-slate-600"><ShieldCheck size={12} className="mt-0.5 shrink-0 text-slate-400" aria-hidden /><span><b>권고:</b> {f.action}</span></p>}
             </li>
           );
         })}
@@ -1141,7 +1197,9 @@ export default function DashboardClient() {
         </div>
       </Panel>
 
-      <CustomerPiiPanel findings={scan.findings} />
+      <CustomerPiiPanel findings={scan.findings} onChanged={load} />
+
+      <SourceCodeExposurePanel findings={scan.findings} onChanged={load} />
 
       <section className="grid gap-4 lg:grid-cols-2">
         <Panel title="심각도 분포" subtitle="조치 필요(미조치) 기준 — 데이터 분류 위험도">
@@ -1155,8 +1213,6 @@ export default function DashboardClient() {
       <Panel title="유출 계정 상세 (식별)" subtitle="조치 필요 ↔ 조치 완료 탭으로 관리 — 조치하면 자동으로 '조치 완료'로 이동, 거기서 다시 수정 가능." right={<span className="chip chip-neutral">총 {summary.total}건</span>} bodyClassName="p-0">
         <AccountGroupedFindings findings={scan.findings} onChanged={load} />
       </Panel>
-
-      <SourceCodeExposurePanel />
 
       {sources.length > 0 && (
         <Panel title="수집 출처" subtitle="어떤 인텔리전스 소스에서 언제 수집했는지 기록">
