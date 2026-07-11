@@ -441,6 +441,20 @@ function classifyFinancialPii(text: string): { categories: string[]; count: numb
     while ((m = re.exec(t)) !== null) { const d = m[1].replace(/[- ]/g, ""); if (d.length >= 10 && d.length <= 14 && !(d.length === 11 && /^01[016789]/.test(d))) n++; } add("은행계좌번호", "high", n); }
   // 휴대전화
   add("휴대전화번호", "medium", countGated(/\b01[016789][- ]?\d{3,4}[- ]?\d{4}\b/g));
+  // 이메일 — 예시/플레이스홀더 도메인·로컬 제외(코드 예시 노이즈 억제)
+  { const re = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g; let m: RegExpExecArray | null, n = 0;
+    while ((m = re.exec(t)) !== null) { const e = m[0].toLowerCase(); const dm = e.split("@")[1] || "";
+      if (/@(example|test|sample|domain|email|localhost|yourdomain|company|acme|foo|bar)\./.test(e)) continue;
+      if (/\.(example|test|invalid|local)$/.test(dm)) continue;
+      if (/^(you|your[_-]?email|user|username|name|someone|admin|test|example|noreply|no-reply|email|first\.last)@/.test(e)) continue;
+      n++; }
+    add("이메일", "medium", n); }
+  // 주소 — 시도 + 시군구 + 동/로/길(범용 한글문장 억제)
+  add("주소", "medium", countGated(/(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)(?:특별시|광역시|특별자치시|특별자치도|도)?\s*[가-힣]{2,}(?:시|군|구)\s*[가-힣0-9]+(?:읍|면|동|가|로|길)/g));
+  // 생년월일 — 키워드 게이팅
+  add("생년월일", "medium", countGated(/(생년월일|생일|출생|dob|birth\s*date|birthdate)["'\s:=]*(?:\d{4}[-.\/]\d{1,2}[-.\/]\d{1,2}|\d{2}[-.\/]\d{1,2}[-.\/]\d{1,2})/gi));
+  // 성명 — 키워드 게이팅(한글 성명 2~4자)
+  add("성명", "medium", countGated(/(성명|이름|고객명|수취인|예금주|가입자명|\bname\b)["'\s:=]+[가-힣]{2,4}(?![가-힣])/gi));
   const categories = [...found.keys()];
   let maxSeverity: string | null = null, count = 0;
   for (const [, e] of found) { count += e.count; if (!maxSeverity || PII_SEV_RANK[e.severity] > PII_SEV_RANK[maxSeverity]) maxSeverity = e.severity; }

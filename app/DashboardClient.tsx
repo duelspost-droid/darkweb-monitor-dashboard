@@ -748,7 +748,7 @@ function CustomerPiiPanel({ findings, onChanged }: { findings: RemediableFinding
   return (
     <Panel
       title="고객 개인정보 노출 (공개 소스코드)"
-      subtitle="공개 GitHub 코드에서 CI·DI·주민번호·카드 등 고객 개인정보가 탐지된 건 — 실제 값은 저장하지 않고 유형·위치만 기록. 건별로 조치하세요."
+      subtitle="공개 GitHub 코드에서 고유식별정보(주민등록번호·외국인등록번호·여권·운전면허)·개인정보(성명·주소·생년월일·이메일·전화)·금융정보(카드·계좌·CI·DI)가 탐지된 건 — 실제 값은 저장하지 않고 유형·위치만 기록. 건별로 조치하세요."
       right={pii.length
         ? <span className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-bold ${openCount ? "border-rose-300 bg-rose-100 text-rose-700" : "border-teal-200 bg-teal-50 text-teal-700"}`}><ShieldAlert size={13} aria-hidden /> 조치 필요 {openCount} / 총 {pii.length}</span>
         : <span className="inline-flex items-center gap-1 rounded-full border border-teal-200 bg-teal-50 px-3 py-1 text-xs font-bold text-teal-700"><ShieldCheck size={13} aria-hidden /> 노출 없음</span>}
