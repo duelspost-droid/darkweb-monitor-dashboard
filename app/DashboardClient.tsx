@@ -762,7 +762,7 @@ function CustomerPiiPanel({ findings, onChanged }: { findings: RemediableFinding
             return (
               <li key={f.id} className={`rounded-xl border p-3 ${isOpen ? "border-rose-300 bg-rose-50" : "border-slate-200 bg-slate-50 opacity-80"}`}>
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${PII_SEV_STYLE[f.severity] ?? PII_SEV_STYLE.high}`}>{f.severity === "critical" ? "심각" : f.severity === "high" ? "높음" : f.severity}</span>
+                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${PII_SEV_STYLE[f.severity] ?? PII_SEV_STYLE.high}`}>{f.severity === "critical" ? "심각" : f.severity === "high" ? "높음" : f.severity === "medium" ? "보통" : f.severity === "low" ? "낮음" : f.severity}</span>
                   <span className="min-w-0 break-all font-mono text-sm font-semibold text-ink">{f.breachTitle}</span>
                   {f.referenceUrl ? <a href={f.referenceUrl} target="_blank" rel="noreferrer" className="ml-auto inline-flex shrink-0 items-center gap-1 font-mono text-[11px] text-sky-600 hover:underline">열기 <span aria-hidden>↗</span></a> : null}
                 </div>
