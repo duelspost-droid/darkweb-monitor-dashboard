@@ -410,55 +410,67 @@ function rrnValid(d13: string): boolean {
   for (let i = 0; i < 12; i++) sum += (d13.charCodeAt(i) - 48) * w[i];
   return ((11 - (sum % 11)) % 10) === (d13.charCodeAt(12) - 48);
 }
-function classifyFinancialPii(text: string): { categories: string[]; count: number; maxSeverity: string | null } {
-  if (!text || typeof text !== "string") return { categories: [], count: 0, maxSeverity: null };
+function classifyFinancialPii(text: string): { categories: string[]; count: number; maxSeverity: string | null; locations: { category: string; lines: number[] }[] } {
+  if (!text || typeof text !== "string") return { categories: [], count: 0, maxSeverity: null, locations: [] };
   const t = text.length > 200000 ? text.slice(0, 200000) : text;
-  const found = new Map<string, { count: number; severity: string }>();
-  const add = (label: string, severity: string, n: number) => {
-    if (!n) return;
-    const e = found.get(label) || { count: 0, severity };
-    e.count += n;
+  // 개행 오프셋 사전계산 → 매치 index 를 라인번호로 변환. 값·주변문맥은 저장 안 함(라인 위치만).
+  const nl: number[] = [];
+  for (let i = 0; i < t.length; i++) if (t.charCodeAt(i) === 10) nl.push(i);
+  const lineOf = (idx: number) => { let lo = 0, hi = nl.length; while (lo < hi) { const mid = (lo + hi) >> 1; if (nl[mid] < idx) lo = mid + 1; else hi = mid; } return lo + 1; };
+  const LINES_PER_CAT = 8; // 카테고리별 저장 라인 상한(JSON 경량화)
+  const found = new Map<string, { count: number; severity: string; lines: Set<number> }>();
+  const add = (label: string, severity: string, lines: number[]) => {
+    if (!lines.length) return;
+    const e = found.get(label) || { count: 0, severity, lines: new Set<number>() };
+    e.count += lines.length;
     if (PII_SEV_RANK[severity] > PII_SEV_RANK[e.severity]) e.severity = severity;
+    for (const ln of lines) if (e.lines.size < LINES_PER_CAT) e.lines.add(ln);
     found.set(label, e);
   };
-  const countGated = (re: RegExp) => { let n = 0; while (re.exec(t) !== null) n++; return n; };
+  // 키워드 게이팅 계열 — 매치 라인 수집(값 미보관).
+  const collectGated = (re: RegExp, label: string, severity: string) => {
+    let m: RegExpExecArray | null; const lines: number[] = [];
+    while ((m = re.exec(t)) !== null) lines.push(lineOf(m.index));
+    add(label, severity, lines);
+  };
   // 주민등록번호/외국인등록번호 — 날짜검증 정규식 + 모듈러11 체크섬(자체검증)
-  { const re = /\b(\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01]))-?([1-8]\d{6})\b/g; let m: RegExpExecArray | null, n = 0;
-    while ((m = re.exec(t)) !== null) { if (rrnValid(m[1] + m[2])) n++; } add("주민등록번호/외국인등록번호", "critical", n); }
+  { const re = /\b(\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01]))-?([1-8]\d{6})\b/g; let m: RegExpExecArray | null; const lines: number[] = [];
+    while ((m = re.exec(t)) !== null) { if (rrnValid(m[1] + m[2])) lines.push(lineOf(m.index)); } add("주민등록번호/외국인등록번호", "critical", lines); }
   // 카드번호 — 16자리(구분자 허용) + Luhn(자체검증)
-  { const re = /\b(?:\d[ -]?){15}\d\b/g; let m: RegExpExecArray | null, n = 0;
-    while ((m = re.exec(t)) !== null) { const d = m[0].replace(/[ -]/g, ""); if (d.length === 16 && luhnValid(d)) n++; } add("신용/체크카드번호", "critical", n); }
+  { const re = /\b(?:\d[ -]?){15}\d\b/g; let m: RegExpExecArray | null; const lines: number[] = [];
+    while ((m = re.exec(t)) !== null) { const d = m[0].replace(/[ -]/g, ""); if (d.length === 16 && luhnValid(d)) lines.push(lineOf(m.index)); } add("신용/체크카드번호", "critical", lines); }
   // CI(연계정보) — 키워드 게이팅 + 88자 base64(== 패딩)
-  add("CI(연계정보)", "critical", countGated(/(?:\bci\b|unique_key|connecting_info(?:rmation)?|연계정보)["'\s]*[:=]["'\s]*[A-Za-z0-9+/]{86}==/gi));
+  collectGated(/(?:\bci\b|unique_key|connecting_info(?:rmation)?|연계정보)["'\s]*[:=]["'\s]*[A-Za-z0-9+/]{86}==/gi, "CI(연계정보)", "critical");
   // DI(중복가입확인정보) — 키워드 게이팅(길이 미확정→키워드 필수)
-  add("DI(중복가입확인정보)", "critical", countGated(/(?:\bdi\b|unique_in_site|dupinfo|duplicate_info|중복가입)["'\s]*[:=]["'\s]*[A-Za-z0-9+/]{64,86}={0,2}/gi));
+  collectGated(/(?:\bdi\b|unique_in_site|dupinfo|duplicate_info|중복가입)["'\s]*[:=]["'\s]*[A-Za-z0-9+/]{64,86}={0,2}/gi, "DI(중복가입확인정보)", "critical");
   // 여권 — 키워드 게이팅
-  add("여권번호", "high", countGated(/(?:passport|여권)["'\s:=]*[A-Za-z]\d{8}\b/gi));
+  collectGated(/(?:passport|여권)["'\s:=]*[A-Za-z]\d{8}\b/gi, "여권번호", "high");
   // 운전면허 — 키워드 게이팅
-  add("운전면허번호", "high", countGated(/(?:license|운전면허|면허번호)["'\s:=]*\d{2}-?\d{2}-?\d{6}-?\d{2}\b/gi));
+  collectGated(/(?:license|운전면허|면허번호)["'\s:=]*\d{2}-?\d{2}-?\d{6}-?\d{2}\b/gi, "운전면허번호", "high");
   // 은행계좌 — 키워드/은행명 게이팅 + 자릿수(10~14)
-  { const re = /(?:계좌|account|입금|이체|국민은행|신한은행|우리은행|하나은행|농협|기업은행|전북은행|광주은행)["'\s:=]*(\d{2,6}[- ]?\d{2,6}[- ]?\d{1,6})\b/gi; let m: RegExpExecArray | null, n = 0;
-    while ((m = re.exec(t)) !== null) { const d = m[1].replace(/[- ]/g, ""); if (d.length >= 10 && d.length <= 14 && !(d.length === 11 && /^01[016789]/.test(d))) n++; } add("은행계좌번호", "high", n); }
+  { const re = /(?:계좌|account|입금|이체|국민은행|신한은행|우리은행|하나은행|농협|기업은행|전북은행|광주은행)["'\s:=]*(\d{2,6}[- ]?\d{2,6}[- ]?\d{1,6})\b/gi; let m: RegExpExecArray | null; const lines: number[] = [];
+    while ((m = re.exec(t)) !== null) { const d = m[1].replace(/[- ]/g, ""); if (d.length >= 10 && d.length <= 14 && !(d.length === 11 && /^01[016789]/.test(d))) lines.push(lineOf(m.index)); } add("은행계좌번호", "high", lines); }
   // 휴대전화
-  add("휴대전화번호", "medium", countGated(/\b01[016789][- ]?\d{3,4}[- ]?\d{4}\b/g));
+  collectGated(/\b01[016789][- ]?\d{3,4}[- ]?\d{4}\b/g, "휴대전화번호", "medium");
   // 이메일 — 예시/플레이스홀더 도메인·로컬 제외(코드 예시 노이즈 억제)
-  { const re = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g; let m: RegExpExecArray | null, n = 0;
+  { const re = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g; let m: RegExpExecArray | null; const lines: number[] = [];
     while ((m = re.exec(t)) !== null) { const e = m[0].toLowerCase(); const dm = e.split("@")[1] || "";
       if (/@(example|test|sample|domain|email|localhost|yourdomain|company|acme|foo|bar)\./.test(e)) continue;
       if (/\.(example|test|invalid|local)$/.test(dm)) continue;
       if (/^(you|your[_-]?email|user|username|name|someone|admin|test|example|noreply|no-reply|email|first\.last)@/.test(e)) continue;
-      n++; }
-    add("이메일", "medium", n); }
+      lines.push(lineOf(m.index)); }
+    add("이메일", "medium", lines); }
   // 주소 — 시도 + 시군구 + 동/로/길(범용 한글문장 억제)
-  add("주소", "medium", countGated(/(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)(?:특별시|광역시|특별자치시|특별자치도|도)?\s*[가-힣]{2,}(?:시|군|구)\s*[가-힣0-9]+(?:읍|면|동|가|로|길)/g));
+  collectGated(/(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)(?:특별시|광역시|특별자치시|특별자치도|도)?\s*[가-힣]{2,}(?:시|군|구)\s*[가-힣0-9]+(?:읍|면|동|가|로|길)/g, "주소", "medium");
   // 생년월일 — 키워드 게이팅
-  add("생년월일", "medium", countGated(/(생년월일|생일|출생|dob|birth\s*date|birthdate)["'\s:=]*(?:\d{4}[-.\/]\d{1,2}[-.\/]\d{1,2}|\d{2}[-.\/]\d{1,2}[-.\/]\d{1,2})/gi));
+  collectGated(/(생년월일|생일|출생|dob|birth\s*date|birthdate)["'\s:=]*(?:\d{4}[-.\/]\d{1,2}[-.\/]\d{1,2}|\d{2}[-.\/]\d{1,2}[-.\/]\d{1,2})/gi, "생년월일", "medium");
   // 성명 — 키워드 게이팅(한글 성명 2~4자)
-  add("성명", "medium", countGated(/(성명|이름|고객명|수취인|예금주|가입자명|\bname\b)["'\s:=]+[가-힣]{2,4}(?![가-힣])/gi));
+  collectGated(/(성명|이름|고객명|수취인|예금주|가입자명|\bname\b)["'\s:=]+[가-힣]{2,4}(?![가-힣])/gi, "성명", "medium");
   const categories = [...found.keys()];
+  const locations = [...found.entries()].map(([category, e]) => ({ category, lines: [...e.lines].sort((a, b) => a - b) }));
   let maxSeverity: string | null = null, count = 0;
   for (const [, e] of found) { count += e.count; if (!maxSeverity || PII_SEV_RANK[e.severity] > PII_SEV_RANK[maxSeverity]) maxSeverity = e.severity; }
-  return { categories, count, maxSeverity };
+  return { categories, count, maxSeverity, locations };
 }
 
 // ── GitHub 공개 노출 검색 (키-게이트, 무료 합법) → breach_findings ───────────
@@ -523,6 +535,7 @@ async function collectGithub(domains: string[], nowIso: string): Promise<{ findi
                   severity: pii.maxSeverity || "high",
                   source: "고객정보 노출 (GitHub)",
                   referenceUrl: url,
+                  piiLocations: pii.locations, // 카테고리별 라인 위치(값 미포함)
                 }, nowIso, `pii|${key}`));
               }
             }
@@ -694,6 +707,8 @@ interface Finding {
   finding_id: string; account_masked: string; account: string; domain: string; breach_name: string;
   breach_title: string; breach_date: string | null; data_classes: string[]; severity: string;
   password_risk?: string; industry?: string; reference_url?: string; breach_logo?: string; source?: string;
+  // 개인정보 노출 위치 — 카테고리별 라인번호(값·문맥 미저장). GitHub 딥링크(url#L<line>)용.
+  pii_locations?: { category: string; lines: number[] }[];
 }
 async function mkFinding(domain: string, alias: string, name: string, meta: Catalog[string], nowIso: string): Promise<Finding & { is_new: boolean; discovered_at: string }> {
   return {
@@ -712,7 +727,7 @@ async function mkFinding(domain: string, alias: string, name: string, meta: Cata
 // 카탈로그 없이 보조 소스가 직접 finding 을 만들 때 사용. dataClasses 는 이미 한글 분류.
 // idSeed 로 finding_id 충돌 방지(소스별 레코드). alias="*" = 도메인 단위(특정 계정 없음).
 async function mkRawFinding(
-  o: { domain: string; alias: string; breachName: string; breachTitle?: string; breachDate?: string; dataClassesKo: string[]; severity: string; source: string; referenceUrl?: string },
+  o: { domain: string; alias: string; breachName: string; breachTitle?: string; breachDate?: string; dataClassesKo: string[]; severity: string; source: string; referenceUrl?: string; piiLocations?: { category: string; lines: number[] }[] },
   nowIso: string, idSeed = "",
 ): Promise<Finding & { is_new: boolean; discovered_at: string }> {
   const aliasKey = o.alias || "*";
@@ -723,6 +738,7 @@ async function mkRawFinding(
     domain: o.domain, breach_name: o.breachName, breach_title: o.breachTitle || o.breachName,
     breach_date: o.breachDate || null, data_classes: o.dataClassesKo, severity: o.severity,
     reference_url: o.referenceUrl, source: o.source, is_new: false, discovered_at: nowIso,
+    pii_locations: o.piiLocations,
   };
 }
 
@@ -930,6 +946,7 @@ Deno.serve(async (req) => {
         industry: f.industry ?? null,
         reference_url: f.reference_url ?? null,
         breach_logo: f.breach_logo ?? null,
+        pii_locations: f.pii_locations ?? null,
         last_scan_tag: scanTag,
       }));
       await sbUpsert(rows);

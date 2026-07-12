@@ -25,6 +25,8 @@ export interface BreachFinding {
   source: string;
   // 참고 링크 (예: GitHub 노출 파일 URL) — 있으면 표시
   referenceUrl?: string;
+  // 개인정보 노출 위치 — 카테고리별 라인번호(값·문맥 미저장, 위치만). referenceUrl#L<line> 딥링크로 표시.
+  piiLocations?: { category: string; lines: number[] }[];
   // 조치 상태 (open=미조치 | remediated=조치완료 | dismissed=이상없음) + 조치 기록
   status?: string;
   remediationNote?: string;

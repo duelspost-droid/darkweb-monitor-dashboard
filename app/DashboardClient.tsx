@@ -354,13 +354,20 @@ function exportInfostealerJson(items: InfostealerFinding[], hosts: InfostealerHo
 }
 
 // Supabase 3개 테이블 → BreachScan 조립 (관리자 인증 후 클라이언트에서).
+const BF_COLS_BASE =
+  "finding_id,account_masked,account,domain,breach_name,breach_title,breach_date,data_classes,severity,is_new,discovered_at,source,reference_url,status,remediation_note,remediated_by,remediated_at";
+// 017(pii_locations) 미적용 배포창 대비 — 컬럼 부재로 대시보드 전체가 죽지 않게 폴백 재조회.
+async function queryBreachFindings() {
+  const res = await supabase.from("breach_findings").select(`${BF_COLS_BASE},pii_locations`);
+  if (res.error && (res.error.code === "42703" || /pii_locations/i.test(res.error.message ?? ""))) {
+    return await supabase.from("breach_findings").select(BF_COLS_BASE);
+  }
+  return res;
+}
+
 async function fetchScan(): Promise<BreachScan> {
   const [bf, sr, inf, hosts] = await Promise.all([
-    supabase
-      .from("breach_findings")
-      .select(
-        "finding_id,account_masked,account,domain,breach_name,breach_title,breach_date,data_classes,severity,is_new,discovered_at,source,reference_url,status,remediation_note,remediated_by,remediated_at"
-      ),
+    queryBreachFindings(),
     supabase.from("scan_runs").select("*").order("scanned_at", { ascending: false }).limit(30),
     supabase.from("infostealer_findings").select("*").order("total", { ascending: false }),
     supabase.from("infostealer_hosts").select("*").order("date_compromised", { ascending: false }),
@@ -386,6 +393,8 @@ async function fetchScan(): Promise<BreachScan> {
     discoveredAt: r.discovered_at,
     source: r.source ?? "",
     referenceUrl: r.reference_url ?? undefined,
+    // pii_locations 는 폴백 셀렉트(017 미적용)에선 부재 → 좁은 캐스트로 안전 접근.
+    piiLocations: (() => { const pl = (r as { pii_locations?: unknown }).pii_locations; return Array.isArray(pl) ? (pl as { category: string; lines: number[] }[]) : undefined; })(),
     status: r.status ?? "open",
     remediationNote: r.remediation_note ?? "",
     remediatedBy: r.remediated_by ?? "",
@@ -732,7 +741,7 @@ function FindingRemediation({ findingId, status, note, by, at, suggestion, onCha
 }
 
 // 소스코드·개인정보 노출 finding 의 조치 대상 필드(계정유출과 별도로 건별 조치).
-type RemediableFinding = { id: string; source: string; breachTitle: string; dataClasses: string[]; severity: string; referenceUrl?: string; status?: string; remediationNote?: string; remediatedBy?: string; remediatedAt?: string };
+type RemediableFinding = { id: string; source: string; breachTitle: string; dataClasses: string[]; severity: string; referenceUrl?: string; piiLocations?: { category: string; lines: number[] }[]; status?: string; remediationNote?: string; remediatedBy?: string; remediatedAt?: string };
 
 // 고객 개인정보 노출 — 공개 소스코드 스캔에서 탐지된 CI/DI/주민번호/카드 등(실제 값 미저장, 유형·위치만) + 건별 조치.
 const PII_SEV_STYLE: Record<string, string> = {
@@ -748,7 +757,7 @@ function CustomerPiiPanel({ findings, onChanged }: { findings: RemediableFinding
   return (
     <Panel
       title="고객 개인정보 노출 (공개 소스코드)"
-      subtitle="공개 GitHub 코드에서 고유식별정보(주민등록번호·외국인등록번호·여권·운전면허)·개인정보(성명·주소·생년월일·이메일·전화)·금융정보(카드·계좌·CI·DI)가 탐지된 건 — 실제 값은 저장하지 않고 유형·위치만 기록. 건별로 조치하세요."
+      subtitle="공개 GitHub 코드에서 고유식별정보(주민등록번호·외국인등록번호·여권·운전면허)·개인정보(성명·주소·생년월일·이메일·전화)·금융정보(카드·계좌·CI·DI)가 탐지된 건 — 실제 값은 저장하지 않고 유형·위치(파일 URL·라인)만 기록. 라인 링크를 누르면 공개 코드의 해당 줄로 이동합니다. 건별로 조치하세요."
       right={pii.length
         ? <span className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-bold ${openCount ? "border-rose-300 bg-rose-100 text-rose-700" : "border-teal-200 bg-teal-50 text-teal-700"}`}><ShieldAlert size={13} aria-hidden /> 조치 필요 {openCount} / 총 {pii.length}</span>
         : <span className="inline-flex items-center gap-1 rounded-full border border-teal-200 bg-teal-50 px-3 py-1 text-xs font-bold text-teal-700"><ShieldCheck size={13} aria-hidden /> 노출 없음</span>}
@@ -764,10 +773,37 @@ function CustomerPiiPanel({ findings, onChanged }: { findings: RemediableFinding
                 <div className="flex flex-wrap items-center gap-2">
                   <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${PII_SEV_STYLE[f.severity] ?? PII_SEV_STYLE.high}`}>{f.severity === "critical" ? "심각" : f.severity === "high" ? "높음" : f.severity === "medium" ? "보통" : f.severity === "low" ? "낮음" : f.severity}</span>
                   <span className="min-w-0 break-all font-mono text-sm font-semibold text-ink">{f.breachTitle}</span>
-                  {f.referenceUrl ? <a href={f.referenceUrl} target="_blank" rel="noreferrer" className="ml-auto inline-flex shrink-0 items-center gap-1 font-mono text-[11px] text-sky-600 hover:underline">열기 <span aria-hidden>↗</span></a> : null}
+                  {f.referenceUrl ? <a href={f.referenceUrl} target="_blank" rel="noreferrer" className="ml-auto inline-flex shrink-0 items-center gap-1 font-mono text-[11px] text-sky-600 hover:underline">파일 열기 <span aria-hidden>↗</span></a> : null}
                 </div>
-                <div className="mt-1.5 flex flex-wrap gap-1">
-                  {f.dataClasses.map((c) => <span key={c} className="rounded-full border border-rose-200 bg-white/60 px-2 py-0.5 text-[11px] font-semibold text-rose-700">{c}</span>)}
+                {/* 노출 위치 — 어느 URL(위 파일 열기) · 어느 부분(카테고리별 라인 딥링크 url#L<line>). 값·문맥 미표시. */}
+                <div className="mt-2 rounded-lg border border-rose-200 bg-white/50 p-2">
+                  <div className="mb-1 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-muted"><MapPin size={11} aria-hidden /> 노출 항목 · 위치</div>
+                  {(() => {
+                    const locByCat = new Map((f.piiLocations ?? []).map((l) => [l.category, l.lines] as const));
+                    const anyLoc = (f.piiLocations ?? []).some((l) => (l.lines?.length ?? 0) > 0);
+                    return (
+                      <div className="space-y-1">
+                        {f.dataClasses.map((c) => {
+                          const lines = locByCat.get(c) ?? [];
+                          return (
+                            <div key={c} className="flex flex-wrap items-center gap-1.5">
+                              <span className="rounded-full border border-rose-200 bg-white/60 px-2 py-0.5 text-[11px] font-semibold text-rose-700">{c}</span>
+                              {lines.length > 0 ? (
+                                <>
+                                  {lines.map((ln) => (
+                                    f.referenceUrl
+                                      ? <a key={ln} href={`${f.referenceUrl.split("#")[0]}#L${ln}`} target="_blank" rel="noreferrer" title="공개 코드의 해당 라인으로 이동(대략 위치)" className="inline-flex items-center gap-0.5 rounded border border-sky-300 bg-sky-50 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-sky-700 hover:underline">L{ln}<span aria-hidden>↗</span></a>
+                                      : <span key={ln} className="rounded border border-slate-300 bg-slate-50 px-1.5 py-0.5 font-mono text-[10px] text-slate-600">L{ln}</span>
+                                  ))}
+                                </>
+                              ) : <span className="text-[10px] text-muted">위치 미상(파일 단위)</span>}
+                            </div>
+                          );
+                        })}
+                        {!anyLoc ? <p className="pt-0.5 text-[10px] text-muted">라인 위치는 다음 스캔부터 채워집니다 — 현재 건은 파일 단위로만 확인됩니다.</p> : null}
+                      </div>
+                    );
+                  })()}
                 </div>
                 <FindingRemediation findingId={f.id} status={f.status ?? "open"} note={f.remediationNote} by={f.remediatedBy} at={f.remediatedAt} suggestion="해당 레포 즉시 takedown 요청 + 유출 고객 통지·보호. 실제 값은 시스템에 미저장(유형·위치만)." onChanged={onChanged} />
               </li>

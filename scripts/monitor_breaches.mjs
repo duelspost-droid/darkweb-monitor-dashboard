@@ -301,7 +301,7 @@ function makeFinding(domain, alias, breachName, meta, nowIso) {
 
 // 카탈로그 없이 보조 소스(Hudson Rock 계정별·IntelX·LeakCheck)가 직접 finding 을 만들 때 사용.
 // dataClasses 는 이미 한글 분류, severity 도 직접 지정. idSeed 로 finding_id 충돌 방지(소스별 레코드).
-function makeRawFinding({ domain, alias, breachName, breachTitle, breachDate, dataClassesKo, severity, source, referenceUrl }, nowIso, idSeed = "") {
+function makeRawFinding({ domain, alias, breachName, breachTitle, breachDate, dataClassesKo, severity, source, referenceUrl, piiLocations }, nowIso, idSeed = "") {
   const aliasKey = alias || "*";
   return {
     id: findingId(domain, aliasKey, idSeed ? `${breachName}|${idSeed}` : breachName),
@@ -317,6 +317,7 @@ function makeRawFinding({ domain, alias, breachName, breachTitle, breachDate, da
     discoveredAt: nowIso,
     source,
     referenceUrl: referenceUrl || "",
+    piiLocations: piiLocations || null, // 개인정보 노출 위치(카테고리별 라인, 값 미포함)
   };
 }
 
@@ -558,54 +559,65 @@ function rrnValid(d13) {
   return ((11 - (sum % 11)) % 10) === (d13.charCodeAt(12) - 48);
 }
 function classifyFinancialPii(text) {
-  if (!text || typeof text !== "string") return { categories: [], count: 0, maxSeverity: null };
+  if (!text || typeof text !== "string") return { categories: [], count: 0, maxSeverity: null, locations: [] };
   const t = text.length > 200000 ? text.slice(0, 200000) : text;
+  // 개행 오프셋 사전계산 → 매치 index 를 라인번호로 변환. 값·주변문맥은 저장 안 함(라인 위치만).
+  const nl = [];
+  for (let i = 0; i < t.length; i++) if (t.charCodeAt(i) === 10) nl.push(i);
+  const lineOf = (idx) => { let lo = 0, hi = nl.length; while (lo < hi) { const mid = (lo + hi) >> 1; if (nl[mid] < idx) lo = mid + 1; else hi = mid; } return lo + 1; };
+  const LINES_PER_CAT = 8;
   const found = new Map();
-  const add = (label, severity, n) => {
-    if (!n) return;
-    const e = found.get(label) || { count: 0, severity };
-    e.count += n;
+  const add = (label, severity, lines) => {
+    if (!lines.length) return;
+    const e = found.get(label) || { count: 0, severity, lines: new Set() };
+    e.count += lines.length;
     if (PII_SEV_RANK[severity] > PII_SEV_RANK[e.severity]) e.severity = severity;
+    for (const ln of lines) if (e.lines.size < LINES_PER_CAT) e.lines.add(ln);
     found.set(label, e);
   };
-  const countGated = (re) => { let n = 0; while (re.exec(t) !== null) n++; return n; };
+  const collectGated = (re, label, severity) => {
+    let m; const lines = [];
+    while ((m = re.exec(t)) !== null) lines.push(lineOf(m.index));
+    add(label, severity, lines);
+  };
   // 주민등록번호/외국인등록번호 — 날짜검증 정규식 + 모듈러11 체크섬(자체검증, 키워드 불요)
-  { const re = /\b(\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01]))-?([1-8]\d{6})\b/g; let m, n = 0;
-    while ((m = re.exec(t)) !== null) { if (rrnValid(m[1] + m[2])) n++; } add("주민등록번호/외국인등록번호", "critical", n); }
+  { const re = /\b(\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01]))-?([1-8]\d{6})\b/g; let m; const lines = [];
+    while ((m = re.exec(t)) !== null) { if (rrnValid(m[1] + m[2])) lines.push(lineOf(m.index)); } add("주민등록번호/외국인등록번호", "critical", lines); }
   // 카드번호 — 16자리(구분자 허용) + Luhn(자체검증)
-  { const re = /\b(?:\d[ -]?){15}\d\b/g; let m, n = 0;
-    while ((m = re.exec(t)) !== null) { const d = m[0].replace(/[ -]/g, ""); if (d.length === 16 && luhnValid(d)) n++; } add("신용/체크카드번호", "critical", n); }
+  { const re = /\b(?:\d[ -]?){15}\d\b/g; let m; const lines = [];
+    while ((m = re.exec(t)) !== null) { const d = m[0].replace(/[ -]/g, ""); if (d.length === 16 && luhnValid(d)) lines.push(lineOf(m.index)); } add("신용/체크카드번호", "critical", lines); }
   // CI(연계정보) — 키워드 게이팅 + 88자 base64(== 패딩)
-  add("CI(연계정보)", "critical", countGated(/(?:\bci\b|unique_key|connecting_info(?:rmation)?|연계정보)["'\s]*[:=]["'\s]*[A-Za-z0-9+/]{86}==/gi));
+  collectGated(/(?:\bci\b|unique_key|connecting_info(?:rmation)?|연계정보)["'\s]*[:=]["'\s]*[A-Za-z0-9+/]{86}==/gi, "CI(연계정보)", "critical");
   // DI(중복가입확인정보) — 키워드 게이팅(길이 미확정→키워드 필수)
-  add("DI(중복가입확인정보)", "critical", countGated(/(?:\bdi\b|unique_in_site|dupinfo|duplicate_info|중복가입)["'\s]*[:=]["'\s]*[A-Za-z0-9+/]{64,86}={0,2}/gi));
+  collectGated(/(?:\bdi\b|unique_in_site|dupinfo|duplicate_info|중복가입)["'\s]*[:=]["'\s]*[A-Za-z0-9+/]{64,86}={0,2}/gi, "DI(중복가입확인정보)", "critical");
   // 여권 — 키워드 게이팅
-  add("여권번호", "high", countGated(/(?:passport|여권)["'\s:=]*[A-Za-z]\d{8}\b/gi));
+  collectGated(/(?:passport|여권)["'\s:=]*[A-Za-z]\d{8}\b/gi, "여권번호", "high");
   // 운전면허 — 키워드 게이팅
-  add("운전면허번호", "high", countGated(/(?:license|운전면허|면허번호)["'\s:=]*\d{2}-?\d{2}-?\d{6}-?\d{2}\b/gi));
+  collectGated(/(?:license|운전면허|면허번호)["'\s:=]*\d{2}-?\d{2}-?\d{6}-?\d{2}\b/gi, "운전면허번호", "high");
   // 은행계좌 — 키워드/은행명 게이팅 + 자릿수(10~14)
-  { const re = /(?:계좌|account|입금|이체|국민은행|신한은행|우리은행|하나은행|농협|기업은행|전북은행|광주은행)["'\s:=]*(\d{2,6}[- ]?\d{2,6}[- ]?\d{1,6})\b/gi; let m, n = 0;
-    while ((m = re.exec(t)) !== null) { const d = m[1].replace(/[- ]/g, ""); if (d.length >= 10 && d.length <= 14 && !(d.length === 11 && /^01[016789]/.test(d))) n++; } add("은행계좌번호", "high", n); }
+  { const re = /(?:계좌|account|입금|이체|국민은행|신한은행|우리은행|하나은행|농협|기업은행|전북은행|광주은행)["'\s:=]*(\d{2,6}[- ]?\d{2,6}[- ]?\d{1,6})\b/gi; let m; const lines = [];
+    while ((m = re.exec(t)) !== null) { const d = m[1].replace(/[- ]/g, ""); if (d.length >= 10 && d.length <= 14 && !(d.length === 11 && /^01[016789]/.test(d))) lines.push(lineOf(m.index)); } add("은행계좌번호", "high", lines); }
   // 휴대전화
-  add("휴대전화번호", "medium", countGated(/\b01[016789][- ]?\d{3,4}[- ]?\d{4}\b/g));
+  collectGated(/\b01[016789][- ]?\d{3,4}[- ]?\d{4}\b/g, "휴대전화번호", "medium");
   // 이메일 — 예시/플레이스홀더 도메인·로컬 제외(코드 예시 노이즈 억제)
-  { const re = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g; let m, n = 0;
+  { const re = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g; let m; const lines = [];
     while ((m = re.exec(t)) !== null) { const e = m[0].toLowerCase(); const dm = e.split("@")[1] || "";
       if (/@(example|test|sample|domain|email|localhost|yourdomain|company|acme|foo|bar)\./.test(e)) continue;
       if (/\.(example|test|invalid|local)$/.test(dm)) continue;
       if (/^(you|your[_-]?email|user|username|name|someone|admin|test|example|noreply|no-reply|email|first\.last)@/.test(e)) continue;
-      n++; }
-    add("이메일", "medium", n); }
+      lines.push(lineOf(m.index)); }
+    add("이메일", "medium", lines); }
   // 주소 — 시도 + 시군구 + 동/로/길(범용 한글문장 억제)
-  add("주소", "medium", countGated(/(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)(?:특별시|광역시|특별자치시|특별자치도|도)?\s*[가-힣]{2,}(?:시|군|구)\s*[가-힣0-9]+(?:읍|면|동|가|로|길)/g));
+  collectGated(/(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)(?:특별시|광역시|특별자치시|특별자치도|도)?\s*[가-힣]{2,}(?:시|군|구)\s*[가-힣0-9]+(?:읍|면|동|가|로|길)/g, "주소", "medium");
   // 생년월일 — 키워드 게이팅
-  add("생년월일", "medium", countGated(/(생년월일|생일|출생|dob|birth\s*date|birthdate)["'\s:=]*(?:\d{4}[-.\/]\d{1,2}[-.\/]\d{1,2}|\d{2}[-.\/]\d{1,2}[-.\/]\d{1,2})/gi));
+  collectGated(/(생년월일|생일|출생|dob|birth\s*date|birthdate)["'\s:=]*(?:\d{4}[-.\/]\d{1,2}[-.\/]\d{1,2}|\d{2}[-.\/]\d{1,2}[-.\/]\d{1,2})/gi, "생년월일", "medium");
   // 성명 — 키워드 게이팅(한글 성명 2~4자)
-  add("성명", "medium", countGated(/(성명|이름|고객명|수취인|예금주|가입자명|\bname\b)["'\s:=]+[가-힣]{2,4}(?![가-힣])/gi));
+  collectGated(/(성명|이름|고객명|수취인|예금주|가입자명|\bname\b)["'\s:=]+[가-힣]{2,4}(?![가-힣])/gi, "성명", "medium");
   const categories = [...found.keys()];
+  const locations = [...found.entries()].map(([category, e]) => ({ category, lines: [...e.lines].sort((a, b) => a - b) }));
   let maxSeverity = null, count = 0;
   for (const [, e] of found) { count += e.count; if (!maxSeverity || PII_SEV_RANK[e.severity] > PII_SEV_RANK[maxSeverity]) maxSeverity = e.severity; }
-  return { categories, count, maxSeverity };
+  return { categories, count, maxSeverity, locations };
 }
 
 // ── GitHub 공개 노출 검색 (키-게이트) → breach_findings ──────────────────────
@@ -671,6 +683,7 @@ async function collectGithub(domains, nowIso) {
                   severity: pii.maxSeverity || "high",
                   source: "고객정보 노출 (GitHub)",
                   referenceUrl: url,
+                  piiLocations: pii.locations, // 카테고리별 라인 위치(값 미포함)
                 }, nowIso, `pii|${key}`));
               }
             }
@@ -889,6 +902,7 @@ async function loadSupabase(scan) {
       discovered_at: f.discoveredAt,
       source: f.source,
       reference_url: f.referenceUrl || null,
+      pii_locations: f.piiLocations || null,
     }));
     if (rows.length) {
       const res = await fetchT(`${url}/rest/v1/breach_findings?on_conflict=finding_id`, {
