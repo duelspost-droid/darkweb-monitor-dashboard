@@ -561,3 +561,33 @@ cd /Users/hk/darkweb-monitor-dashboard && npm run supabase:pull
 - [ ] 라이브(로그인) 검증: 두 노출 패널의 "조치하기" 실동작(조치완료→상태변경·감사로그), 확장된 PII 탐지가 다음 스캔에 잡히는지.
 - [ ] (선택) 다크웹 소스 필드매핑(LeakCheck/HIBP)에 고유식별정보 분류 촘촘화.
 - [ ] 015 감사로그가 노출건을 breach_title 로 남기는지 '조치 변경 이력'에서 확인.
+
+---
+
+## 20. 세션 로그 — 2026-07-12 (매번 신규 안정화 + 임원 히어로 상판 + 개인정보 노출 위치표시)
+
+> 19절 이후 이어진 세션. ① '매번 신규' 반복 근본해결, ② 대시보드 상판(히어로)을 임원용으로 크고 화려하게, ③ 고객 개인정보 노출건에 "어느 URL·어느 부분(라인)" 표시. 멀티에이전트(디자인 4방향 심사 / 3렌즈 적대검증) 활용.
+
+### 사용자 지시(요지)
+- "계정유출 매번 신규로 뜨는 거 부분스캔 때문? 둘다 해" → is_new 안정화 2종.
+- "임원용 대시보드처럼 상판 글씨 크고 화려하게" → 히어로 재설계.
+- "고객 개인정보 노출되면 어느 URL 어느 부분에 있는지도 표시" → PII 노출 위치(라인) 표시.
+- "재시도/완료/매번해" → Supabase 저하 재시도, 마이그 Run, 이력 매번 저장.
+
+### 완료 작업 (커밋 · 전부 main, CI 초록)
+- **`9aeefb8` fix(scan): 매번 '신규' 반복 해결** (마이그 **016** `finding_seen` 적용완료 + Edge 재배포). 근본원인: breach_findings 는 매 스캔 stale-delete churn. 소스가 rate-limit/timeout 으로 매 런 다른 부분집합만 수집 → 안 걷힌 유출 삭제됐다 재수집되며 is_new(=현재 DB에 없음) 다시 true. 해결: **finding_seen(append-only, RLS on·정책無=service_role만)** 에 '한 번이라도 본 finding_id' 영속 기록 → is_new = finding_seen 에 없을 때만. + **부분 스캔 가드**: 수집량 < 직전×0.7 이면 stale-delete 스킵(prevBreachCount 판단). Node 콜렉터는 stale-delete 안 하므로 무영향.
+- **`1caaf5c` feat(ui): 임원용 오로라 글래스 히어로 상판**. 멀티에이전트 디자인 4방향→3렌즈(임원·브랜드·반응형) 심사 승자 '오로라 글래스'(8.59). globals.css 의 `.hero*` 전면 교체: 제목 `clamp(1.9rem,1.15rem+3.3vw,3.6rem)`(데스크톱 57.6px/800, 화이트→시안 그라디언트 텍스트+sheen+글로우), 흐르는 오로라 배경(::before), 프로스트 글래스 kicker+라이브 도트(::before). 시안/코발트 SOC 팔레트 유지(골드 배제), `@supports` 폴백(color:#f4fbff)·`prefers-reduced-motion` 정지. 반응형 검증(모바일 375px 제목 27px·가로 오버플로 none). **PageHero.tsx 변경 없음(CSS 드롭인).**
+- **`08f4374` feat(pii): 고객 개인정보 노출 — 어느 URL·어느 부분(라인)** (마이그 **017** `pii_locations jsonb` 적용완료 + Edge 재배포). `classifyFinancialPii`(Edge+Node)가 개행 오프셋 사전계산→매치 index를 라인번호로(이진탐색), 카테고리별 라인 Set(상한 8), **locations 반환**. mkRawFinding/makeRawFinding+upsert 전 행에 `pii_locations`(균일 키 → PGRST102 방지). UI(CustomerPiiPanel): 카테고리별 **라인 딥링크 `L12↗`**(`referenceUrl.split('#')[0]+'#L'+ln` → 공개 코드 해당 줄로 이동). **값·주변 문맥 미저장 — 라인 위치만**(PIPA·전자금융감독규정). 검출 정규식·검증 로직은 불변.
+
+### 검증
+- PII 라인검출 **유닛테스트 7/7**(소스에서 함수 추출 실행; 성명 2건 [4,6]·**값 미유출 직렬화 확인** 포함). Edge esbuild · Node `--check` · `next build`(tsc) 통과.
+- PII 변경 **적대검증 3렌즈**(값유출·정합성·DB통합): **critical 0, 값유출 렌즈 통과**(라인 정수·카테고리 라벨만 저장). CONFIRMED medium 1건 → **fetchScan 폴백 재조회**로 해결: 017 미적용 배포창에서 컬럼 부재(42703)면 pii_locations 없이 재조회 → 대시보드 전체가 마이그에 죽지 않음. 구 데이터는 '위치 미상(파일 단위)' 폴백.
+
+### 배포/운영 메모 (다른 PC용)
+- **마이그 016+017**: 결합 idempotent SQL(`CREATE TABLE IF NOT EXISTS`·`ADD COLUMN IF NOT EXISTS`·`ON CONFLICT DO NOTHING`) 을 SQL Editor monaco 에 base64+atob 주입 → **사용자 Run** ("Success. No rows returned" 확인). auto모드가 에이전트의 프로덕션 mutation Run 차단은 여전.
+- **Supabase 간헐 저하 재발**: "We are investigating a technical issue" 배너 + **Edge Functions "Deploy status unavailable"**(코드 에디터 미로드). Postgres(SQL)는 정상인데 Edge Functions 서비스만 저하되는 구간 있었음 → 잠시 후 복구되면 raw 주입+Deploy 성공. 프런트는 폴백 덕에 저하와 무관하게 안전 배포됨.
+
+### 남은 확인/후속
+- [ ] 라이브(로그인) 검증: PII 패널의 라인 딥링크가 실제 GitHub 파일 해당 줄로 가는지, **다음 스캔(15:00 UTC 또는 수동 트리거) 후 pii_locations 채워지는지**.
+- [ ] 히어로 상판 실기기(모바일) 육안 확인.
+- [ ] **후속 칩(저확률)**: 공개 파일명 자체에 PII가 박힌 경우 breach_title/reference_url 마스킹(기존 결함, 적대검증 PLAUSIBLE low). Edge+Node+프런트 일관 적용 필요.
