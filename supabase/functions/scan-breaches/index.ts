@@ -37,6 +37,8 @@ const LEAKCHECK_API_KEY = Deno.env.get("LEAKCHECK_API_KEY")?.trim();
 const HUDSONROCK_OSINT = (Deno.env.get("HUDSONROCK_OSINT_ENABLED") ?? "1") !== "0";
 const GITHUB_TOKEN = Deno.env.get("GITHUB_TOKEN")?.trim();
 const GITHUB_API = "https://api.github.com";
+const GITLAB_TOKEN = Deno.env.get("GITLAB_TOKEN")?.trim();
+const GITLAB_API = "https://gitlab.com/api/v4";
 
 const LEAK_FIELD_KO: Record<string, string> = {
   password: "비밀번호", username: "사용자명", email: "이메일", phone: "전화번호",
@@ -550,6 +552,68 @@ async function collectGithub(domains: string[], nowIso: string): Promise<{ findi
   return { findings, used: true, count: findings.length };
 }
 
+// ── GitLab 공개 노출 검색 (키-게이트, 무료 합법) → breach_findings ───────────
+// GitLab 은 GitHub 처럼 토큰리스 전역 코드검색 API 가 없어 GITLAB_TOKEN(read_api) 필요.
+// gitlab.com 은 고급검색(Elasticsearch) 활성이라 토큰으로 scope=blobs 전역 검색이 동작한다.
+// 값은 저장하지 않고 레포/파일 포인터만 finding 으로 남긴다(GitHub 수집기와 동일 정책).
+async function collectGitlab(domains: string[], nowIso: string): Promise<{ findings: RawFinding[]; used: boolean; count: number }> {
+  if (!GITLAB_TOKEN) return { findings: [], used: false, count: 0 };
+  const headers = { "PRIVATE-TOKEN": GITLAB_TOKEN };
+  const findings: RawFinding[] = [];
+  const seen = new Set<string>();
+  const projPath = new Map<number, string>(); // project_id → path_with_namespace (URL 구성용 캐시)
+  const GL_QUERIES = [
+    { term: "password", dc: ["공개 코드 노출", "자격증명 의심"], useAt: true },
+    { term: "주민번호", dc: ["공개 코드 노출", "개인정보 의심"], useAt: false },
+    { term: "계좌번호", dc: ["공개 코드 노출", "개인정보 의심"], useAt: false },
+  ];
+  const SEARCH_LIMIT = 12; // 총 검색 호출 상한(Edge 실행시간·레이트 보호)
+  let searches = 0;
+  for (const gq of GL_QUERIES) {
+    for (const domain of domains) {
+      if (searches >= SEARCH_LIMIT) break;
+      searches++;
+      const term = gq.useAt ? `"@${domain}" ${gq.term}` : `"${domain}" ${gq.term}`;
+      const q = encodeURIComponent(term);
+      const r = await fetchJson(`${GITLAB_API}/search?scope=blobs&search=${q}&per_page=15`, { headers }, { retries: 1, baseDelay: 2000 });
+      // deno-lint-ignore no-explicit-any
+      const items: any[] = Array.isArray(r.data) ? r.data : [];
+      for (const it of items) {
+        const pid = Number(it.project_id);
+        const path = it.path || it.filename || "";
+        if (!pid || !path) continue;
+        const key = `gl:${pid}/${path}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        // 프로젝트 web 경로 조회(캐시) → blob URL 구성. 실패 시 검색 링크로 대체.
+        let webPath = projPath.get(pid);
+        if (webPath === undefined) {
+          try {
+            const pr = await fetchJson(`${GITLAB_API}/projects/${pid}`, { headers }, { retries: 0, baseDelay: 1000 });
+            webPath = (pr.data?.path_with_namespace as string) || "";
+          } catch { webPath = ""; }
+          projPath.set(pid, webPath);
+        }
+        const ref = it.ref || "master";
+        const url = webPath ? `https://gitlab.com/${webPath}/-/blob/${ref}/${path}` : `https://gitlab.com/search?scope=blobs&search=${q}`;
+        const title = (webPath ? `${webPath} · ${path}` : `project#${pid} · ${path}`).slice(0, 120);
+        findings.push(await mkRawFinding({
+          domain, alias: "*",
+          breachName: "GitLab 공개 노출",
+          breachTitle: title,
+          dataClassesKo: gq.dc,
+          severity: "high",
+          source: "공개 노출 (GitLab)",
+          referenceUrl: url,
+        }, nowIso, key));
+      }
+      await sleep(1000); // 코드 검색 레이트리밋 배려
+    }
+    if (searches >= SEARCH_LIMIT) break;
+  }
+  return { findings, used: true, count: findings.length };
+}
+
 // ── 공개 소스코드 수동 큐레이션 노출 → breach_findings ──────────────────────
 // 정본(single source of truth): 레포의 data/security/source_code_exposures.json.
 // Edge 는 단일파일 배포라 아래 CURATED_EXPOSURES 로 미러링한다(JSON 수정 시 함께 갱신 — 소량·저빈도).
@@ -893,6 +957,11 @@ Deno.serve(async (req) => {
     if (GITHUB_TOKEN && MONITORED_DOMAINS.length) {
       const gh = await collectGithub(MONITORED_DOMAINS, nowIso);
       if (gh.used) { findings.push(...gh.findings); provenanceExtra.push({ name: "공개 노출 (GitHub)", kind: "breach", endpoint: "api.github.com /search/code", count: gh.count, scannedAt: nowIso }); }
+    }
+    // GitLab 공개 노출 (키-게이트, 무료 합법) — GitHub 과 동일 정책(포인터만)
+    if (GITLAB_TOKEN && MONITORED_DOMAINS.length) {
+      const gl = await collectGitlab(MONITORED_DOMAINS, nowIso);
+      if (gl.used) { findings.push(...gl.findings); provenanceExtra.push({ name: "공개 노출 (GitLab)", kind: "breach", endpoint: "gitlab.com /api/v4/search", count: gl.count, scannedAt: nowIso }); }
     }
     // ProxyNova COMB 콤보리스트 (무료 키리스) — 도메인 단위 노출 계정 열거
     if (MONITORED_DOMAINS.length) {
