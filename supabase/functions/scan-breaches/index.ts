@@ -936,35 +936,54 @@ Deno.serve(async (req) => {
     for (const f of findings) f.source = f.source || source; // 1차 소스 라벨
     primaryCount = findings.length;
 
-    try { // 보조 소스 실패가 전체 스캔을 죽이지 않도록 격리
-    // IntelX (도메인 전수, 키-게이트)
-    if (INTELX_API_KEY && MONITORED_DOMAINS.length) {
+    try { // 보조 소스 오케스트레이션 (개별 실패는 격리)
+    // ── 보조 소스 병렬 수집 ─────────────────────────────────────────────────
+    // 각 소스는 독립(같은 도메인/계정을 서로 다른 API로 조회)이라 병렬 실행한다.
+    // 순차 await 가 Edge Function 월클록(≤150s)을 넘겨 배치가 죽던 문제를 해소.
+    // JS 단일스레드 → findings/provenanceExtra push·infostealerHosts concat 은
+    // 각각 동기 단일문이라 await 사이에서만 양보, 인터리브 레이스 없음.
+    const auxErrors: string[] = [];
+    const runAux = async (label: string, fn: () => Promise<void>) => {
+      try { await fn(); } catch (e) { auxErrors.push(`${label}: ${(e as Error).message}`); }
+    };
+    // 병렬 배치: 서로 다른 호스트만 호출하는 6종(호스트 경합 없음).
+    const auxTasks: Promise<void>[] = [];
+    // IntelX (도메인 전수, 키-게이트) → 2.intelx.io
+    if (INTELX_API_KEY && MONITORED_DOMAINS.length) auxTasks.push(runAux("IntelX", async () => {
       const ix = await collectIntelx(MONITORED_DOMAINS, nowIso);
       if (ix.used) { findings.push(...ix.findings); provenanceExtra.push({ name: "Intelligence X", kind: "breach", endpoint: "2.intelx.io /intelligent/search", count: ix.count, scannedAt: nowIso }); }
-    }
-    // LeakCheck (키 있으면 도메인 v2, 없으면 무료 public 계정별)
-    if (LEAKCHECK_API_KEY ? MONITORED_DOMAINS.length : MONITORED_EMAILS.length) {
+    }));
+    // LeakCheck (키 있으면 도메인 v2, 없으면 무료 public 계정별) → leakcheck.io
+    if (LEAKCHECK_API_KEY ? MONITORED_DOMAINS.length : MONITORED_EMAILS.length) auxTasks.push(runAux("LeakCheck", async () => {
       const lc = await collectLeakcheck(MONITORED_DOMAINS, MONITORED_EMAILS, nowIso);
       if (lc.used) { findings.push(...lc.findings); provenanceExtra.push({ name: lc.mode === "v2-domain" ? "LeakCheck" : "LeakCheck (public)", kind: "breach", endpoint: lc.mode === "v2-domain" ? "leakcheck.io /api/v2/query?type=domain" : "leakcheck.io /api/public", count: lc.count, scannedAt: nowIso }); }
-    }
-    // Hudson Rock 계정별 인포스틸러 (무료) → breach_findings + 호스트 상세
-    if (HUDSONROCK_OSINT && MONITORED_EMAILS.length) {
+    }));
+    // Hudson Rock 계정별 인포스틸러 (무료) → cavalier.hudsonrock.com
+    if (HUDSONROCK_OSINT && MONITORED_EMAILS.length) auxTasks.push(runAux("Cavalier", async () => {
       const hr = await collectCavalierAccounts(MONITORED_EMAILS, nowIso);
-      infostealerHosts = hr.hosts;
+      infostealerHosts = infostealerHosts.concat(hr.hosts);
       if (hr.findings.length) { findings.push(...hr.findings); provenanceExtra.push({ name: "Hudson Rock Cavalier (계정별)", kind: "breach", endpoint: "cavalier.hudsonrock.com /search-by-email", count: hr.findings.length, scannedAt: nowIso }); }
-    }
-    // GitHub 공개 노출 (키-게이트, 무료 합법 크롤링)
-    if (GITHUB_TOKEN && MONITORED_DOMAINS.length) {
+    }));
+    // GitHub 공개 노출 (키-게이트, 무료 합법 크롤링) → api.github.com
+    if (GITHUB_TOKEN && MONITORED_DOMAINS.length) auxTasks.push(runAux("GitHub", async () => {
       const gh = await collectGithub(MONITORED_DOMAINS, nowIso);
       if (gh.used) { findings.push(...gh.findings); provenanceExtra.push({ name: "공개 노출 (GitHub)", kind: "breach", endpoint: "api.github.com /search/code", count: gh.count, scannedAt: nowIso }); }
-    }
-    // GitLab 공개 노출 (키-게이트, 무료 합법) — GitHub 과 동일 정책(포인터만)
-    if (GITLAB_TOKEN && MONITORED_DOMAINS.length) {
+    }));
+    // GitLab 공개 노출 (키-게이트, 무료 합법, 포인터만) → gitlab.com
+    if (GITLAB_TOKEN && MONITORED_DOMAINS.length) auxTasks.push(runAux("GitLab", async () => {
       const gl = await collectGitlab(MONITORED_DOMAINS, nowIso);
       if (gl.used) { findings.push(...gl.findings); provenanceExtra.push({ name: "공개 노출 (GitLab)", kind: "breach", endpoint: "gitlab.com /api/v4/search", count: gl.count, scannedAt: nowIso }); }
-    }
-    // ProxyNova COMB 콤보리스트 (무료 키리스) — 도메인 단위 노출 계정 열거
-    if (MONITORED_DOMAINS.length) {
+    }));
+    // 공개 소스코드 수동 큐레이션 노출 (정적 미러, 네트워크 없음)
+    auxTasks.push(runAux("Curated", async () => {
+      const sc = await collectCuratedExposures(nowIso);
+      if (sc.count) { findings.push(...sc.findings); provenanceExtra.push({ name: "공개 소스코드 점검 (수동 큐레이션)", kind: "breach", endpoint: "data/security/source_code_exposures.json", count: sc.count, scannedAt: nowIso }); }
+    }));
+    await Promise.allSettled(auxTasks);
+    // ProxyNova COMB 는 내부에서 leakcheck.io·cavalier.hudsonrock.com 를 재호출한다 → 위 배치의
+    // LeakCheck·Cavalier 태스크와 같은 호스트. 동시 실행 시 그 두 호스트에 스트림이 겹쳐 429 →
+    // 재시도로 월클록이 예측불가해짐. 배치 완료 후 단독 순차 실행으로 경합 제거(호스트 경합 0).
+    if (MONITORED_DOMAINS.length) await runAux("ProxyNova", async () => {
       const cb = await collectProxynovaComb(MONITORED_DOMAINS, nowIso);
       if (cb.used) {
         // cb.findings 에는 COMB + 유출이력(LeakCheck/XON) + 인포스틸러 교차가 병렬수집되어 합쳐져 있음.
@@ -973,16 +992,12 @@ Deno.serve(async (req) => {
         if (cb.hosts.length) {
           provenanceExtra.push({ name: "Hudson Rock Cavalier (COMB 계정 교차)", kind: "breach", endpoint: "cavalier.hudsonrock.com /search-by-email", count: cb.hosts.length, scannedAt: nowIso });
         }
-        infostealerHosts = [...infostealerHosts, ...cb.hosts]; // 유출∩인포스틸러 교차 호스트
+        infostealerHosts = infostealerHosts.concat(cb.hosts); // 유출∩인포스틸러 교차 호스트
       }
-    }
-    // 공개 소스코드 수동 큐레이션 노출 (data/security/source_code_exposures.json 미러) → breach_findings
-    {
-      const sc = await collectCuratedExposures(nowIso);
-      if (sc.count) { findings.push(...sc.findings); provenanceExtra.push({ name: "공개 소스코드 점검 (수동 큐레이션)", kind: "breach", endpoint: "data/security/source_code_exposures.json", count: sc.count, scannedAt: nowIso }); }
-    }
+    });
+    if (auxErrors.length) note = (note ? note + " | " : "") + `보조 소스 일부 실패: ${auxErrors.join("; ")}`;
     } catch (e) {
-      note = (note ? note + " | " : "") + `보조 소스 일부 실패: ${(e as Error).message}`;
+      note = (note ? note + " | " : "") + `보조 소스 오케스트레이션 실패: ${(e as Error).message}`;
     }
 
     // 중복 제거(같은 finding_id 는 먼저 본 것 유지) + is_new
