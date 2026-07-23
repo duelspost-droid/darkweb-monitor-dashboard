@@ -590,4 +590,27 @@ cd /Users/hk/darkweb-monitor-dashboard && npm run supabase:pull
 ### 남은 확인/후속
 - [ ] 라이브(로그인) 검증: PII 패널의 라인 딥링크가 실제 GitHub 파일 해당 줄로 가는지, **다음 스캔(15:00 UTC 또는 수동 트리거) 후 pii_locations 채워지는지**.
 - [ ] 히어로 상판 실기기(모바일) 육안 확인.
-- [ ] **후속 칩(저확률)**: 공개 파일명 자체에 PII가 박힌 경우 breach_title/reference_url 마스킹(기존 결함, 적대검증 PLAUSIBLE low). Edge+Node+프런트 일관 적용 필요.
+- [x] **후속 칩(저확률)**: 공개 파일명 자체에 PII가 박힌 경우 breach_title/reference_url 마스킹 → **21절에서 처리 완료**.
+
+## 21. 세션 로그 — 2026-07-23 (파일명 PII 마스킹 결함 처리 + 히어로/딥링크 후속 검증)
+
+> 20절 말미 "남은 확인/후속" 3건 처리. 다른 PC 작업분(GitLab 수집기 `38aa8ee`, 보조수집기 병렬화 `6c252be` 등 18커밋)을 로컬에 fast-forward 반영한 뒤 이어감.
+
+### 사용자 지시(요지)
+- "github에서 가져와서 다크웹 프로젝트 준비해" → origin/main pull(38a1fe1→f1ce383), 의존성·env 확인, tsc 통과.
+- "남은 후속진행해" → 20절 후속 3건 처리.
+
+### 완료 작업
+- **✅ #3 파일명 PII 마스킹 결함 수정(Edge+Node+프런트 일관)** — 핵심 딜리버러블.
+  - **결함**: 파일 *내용*의 PII 는 카테고리·라인만 저장(값 미저장)하나, `breach_title`(`${repo} · ${path}`)·`reference_url`(파일 URL)에는 **경로/파일명이 그대로** 들어가 파일명 자체에 주민번호·카드·전화번호가 박히면 값이 DB·대시보드로 노출. (`finding_id`는 SHA1 해시라 안전 — 누출 없음.)
+  - **수정**: `redactPiiInPath(s)` 신설 — **최대 숫자런 추출(내부 단일 `-`/공백 허용) 후 길이·체크섬 판정**(주민/외국인번호=날짜+성별+mod11, 카드=16자리+Luhn, 휴대전화=10~11자리 01[016789]). ⚠️ 정규식 `\b`는 파일명 흔한 패턴 `customers_9001011234567.csv`(밑줄=단어문자)에서 매칭 실패 → **숫자스캔 방식으로 통일**(3곳 동일 알고리즘). 값 포함 시 제목은 `[식별번호]`/`[카드번호]`/`[전화번호]`로 치환, `reference_url`은 파일 URL 대신 **레포/프로젝트 루트**로(딥링크 차단). 적용처: `collectGithub`(포인터+PII 두 finding), `collectGitlab`, Node `collectGithub`.
+  - **프런트 방어심층**(`app/DashboardClient.tsx`): `redactPii`(대괄호 정규식 금지 — Turbopack tailwind 파손 회피, 숫자스캔) + `piiSafeText`/`piiSafeUrl`. 적용: AccountGroupedFindings 노출 제목·링크, CustomerPiiPanel 제목·파일열기·라인딥링크(값 포함 URL이면 링크 숨기고 라인은 평문 span 폴백).
+  - **검증**: 유닛테스트 **10/10**(주민 연속/하이픈·카드·전화·복합 마스킹 + 정상경로/날짜/PR번호/무효카드 오탐0 + 값 잔존0 + 정규식판↔숫자스캔판 완전 일치). `node --check`·Edge esbuild·`tsc --noEmit`·`next build`(Turbopack, 대괄호 파손 없음) 전부 통과.
+- **◑ #1 PII 라인 딥링크·라이브 검증**: 코드 경로 정합성 확인(+ safeUrl 가드로 강화). 라이브 사이트 **도달 확인**(dark.jbax.co.kr HTTPS 200, 모바일 375px 로그인화면 정상 렌더). **로그인 후 딥링크 실동작 + 다음 스캔 후 pii_locations 적재는 자격증명/스캔 트리거 필요 → 사용자 관찰 잔여**(코드는 정상, 데일리 크론 15:00 UTC가 채움).
+- **◑ #2 히어로 모바일 육안**: 반응형 CSS 정합성 확인(`globals.css` `.hero*` clamp 유동크기 + `@media(max-width:640px)` 320px≈25px + `prefers-reduced-motion` 가드). `next build` 통과. **로그인 후 렌더라 히어로 자체 실기기 육안은 자격증명/실기기 필요 → 사용자 잔여**(login gate가 `if(!session)`로 막음).
+
+### 배포/운영 메모
+- **프런트(DashboardClient·globals)**: Pages 자동배포(deploy.yml, 15:30 UTC 또는 push 트리거) — main 반영되면 라이브 갱신.
+- **Edge(scan-breaches/index.ts)**: ⚠️ **미배포** — main 반영 후 Supabase 대시보드 Code 에디터 raw 주입 필요(`getModels()[0].setValue(await fetch(raw index.ts).then(r=>r.text()))`→Deploy). 다음 스캔부터 파일명 마스킹 적용.
+- **Node(monitor_breaches.mjs)**: 로컬 `npm run security:scan` 시 반영(크론 실주체는 Edge).
+- 반영 경로: 로컬 main clean → 피처 브랜치 커밋 → push → PR → 머지(main 직접 push 제약).

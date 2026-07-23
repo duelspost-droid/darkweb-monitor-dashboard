@@ -30,6 +30,60 @@ import { supabase, supabaseConfigured, adminEmail } from "@/lib/supabase/browser
 import type { BreachScan, BreachSeverity, InfostealerFinding, InfostealerHost } from "@/lib/types/breachMonitor";
 import sourceCodeExposures from "@/data/security/source_code_exposures.json";
 
+// ── PII 표시 방어심층: 제목·URL 에 박힌 고신뢰 식별·금융 값(주민/외국인등록번호·카드·휴대전화)을 마스킹 ──
+// 수집 단계(Edge·Node)에서 이미 마스킹하지만, 구(舊)행·다른 경로 대비 화면 표시 직전에 한 번 더 거른다.
+// ⚠️ Turbopack tailwind content 스캐너가 대괄호 정규식([...])을 arbitrary 유틸리티로 오인해 빌드를
+//    깨므로(HANDOFF 기록), 여기서는 정규식 문자클래스 없이 숫자 스캐닝으로만 판정한다.
+function piiLuhn(d: string): boolean {
+  let sum = 0, alt = false;
+  for (let i = d.length - 1; i >= 0; i--) {
+    let n = d.charCodeAt(i) - 48;
+    if (n < 0 || n > 9) return false;
+    if (alt) { n *= 2; if (n > 9) n -= 9; }
+    sum += n; alt = !alt;
+  }
+  return sum % 10 === 0;
+}
+function piiRrn(d: string): boolean {
+  if (d.length !== 13) return false;
+  const mm = (d.charCodeAt(2) - 48) * 10 + (d.charCodeAt(3) - 48);
+  const dd = (d.charCodeAt(4) - 48) * 10 + (d.charCodeAt(5) - 48);
+  const g = d.charCodeAt(6) - 48;
+  if (mm < 1 || mm > 12 || dd < 1 || dd > 31 || g < 1 || g > 8) return false;
+  const w = [2, 3, 4, 5, 6, 7, 8, 9, 2, 3, 4, 5];
+  let sum = 0;
+  for (let i = 0; i < 12; i++) sum += (d.charCodeAt(i) - 48) * w[i];
+  return ((11 - (sum % 11)) % 10) === (d.charCodeAt(12) - 48);
+}
+function piiClassifyRun(d: string): string | null {
+  if (d.length === 13 && piiRrn(d)) return "[식별번호]";
+  if (d.length === 16 && piiLuhn(d)) return "[카드번호]";
+  if ((d.length === 10 || d.length === 11) && d.charCodeAt(0) === 48 && d.charCodeAt(1) === 49 && "016789".indexOf(d.charAt(2)) >= 0) return "[전화번호]";
+  return null;
+}
+function redactPii(s: string): { text: string; redacted: boolean } {
+  if (!s) return { text: s, redacted: false };
+  const isD = (c: number) => c >= 48 && c <= 57;
+  let out = "", redacted = false, i = 0;
+  const n = s.length;
+  while (i < n) {
+    if (!isD(s.charCodeAt(i))) { out += s.charAt(i); i++; continue; }
+    let j = i, digits = "";
+    while (j < n) {
+      const c = s.charCodeAt(j);
+      if (isD(c)) { digits += s.charAt(j); j++; continue; }
+      if ((c === 45 || c === 32) && j + 1 < n && isD(s.charCodeAt(j + 1))) { j++; continue; } // 내부 단일 '-'/공백 구분자 허용
+      break;
+    }
+    const label = piiClassifyRun(digits);
+    if (label) { out += label; redacted = true; } else { out += s.slice(i, j); }
+    i = j;
+  }
+  return { text: out, redacted };
+}
+const piiSafeText = (s?: string) => (s ? redactPii(s).text : (s ?? ""));
+const piiSafeUrl = (u?: string) => (u && !redactPii(u).redacted ? u : undefined);
+
 const SEVERITY_META: Record<BreachSeverity, { label: string; color: string; chip: string }> = {
   critical: { label: "심각", color: "#be123c", chip: "bg-rose-100 text-rose-700 border-rose-300" },
   high: { label: "높음", color: "#b45309", chip: "bg-amber-100 text-amber-700 border-amber-300" },
@@ -278,12 +332,12 @@ function AccountGroupedFindings({ findings, onChanged }: { findings: GroupingFin
                   <ul>
                     {g.exposures.map((e) => (
                       <li key={e.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-slate-50 px-4 py-2 text-sm">
-                        <span className="min-w-0 break-words font-medium text-slate-700">{e.title}</span>
+                        <span className="min-w-0 break-words font-medium text-slate-700">{piiSafeText(e.title)}</span>
                         <span className="shrink-0 font-mono text-xs text-muted">{e.date || "—"}</span>
                         <span className="flex flex-wrap gap-1">
                           {e.dataClasses.slice(0, 4).map((dc) => (<span key={dc} className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[11px] text-slate-600">{dc}</span>))}
                         </span>
-                        <span className="ml-auto shrink-0 text-[11px] text-muted">{e.source}{e.referenceUrl && <a href={e.referenceUrl} target="_blank" rel="noreferrer" className="ml-1.5 font-semibold text-sky-600 hover:underline">↗</a>}</span>
+                        <span className="ml-auto shrink-0 text-[11px] text-muted">{e.source}{piiSafeUrl(e.referenceUrl) && <a href={piiSafeUrl(e.referenceUrl)} target="_blank" rel="noreferrer" className="ml-1.5 font-semibold text-sky-600 hover:underline">↗</a>}</span>
                       </li>
                     ))}
                   </ul>
@@ -768,12 +822,14 @@ function CustomerPiiPanel({ findings, onChanged }: { findings: RemediableFinding
         <ul className="space-y-2">
           {sorted.map((f) => {
             const isOpen = (f.status ?? "open") === "open";
+            const safeTitle = piiSafeText(f.breachTitle); // 파일명에 값 있으면 마스킹
+            const safeUrl = piiSafeUrl(f.referenceUrl);   // 값 포함 URL 은 링크 숨김(딥링크도 차단)
             return (
               <li key={f.id} className={`rounded-xl border p-3 ${isOpen ? "border-rose-300 bg-rose-50" : "border-slate-200 bg-slate-50 opacity-80"}`}>
                 <div className="flex flex-wrap items-center gap-2">
                   <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${PII_SEV_STYLE[f.severity] ?? PII_SEV_STYLE.high}`}>{f.severity === "critical" ? "심각" : f.severity === "high" ? "높음" : f.severity === "medium" ? "보통" : f.severity === "low" ? "낮음" : f.severity}</span>
-                  <span className="min-w-0 break-all font-mono text-sm font-semibold text-ink">{f.breachTitle}</span>
-                  {f.referenceUrl ? <a href={f.referenceUrl} target="_blank" rel="noreferrer" className="ml-auto inline-flex shrink-0 items-center gap-1 font-mono text-[11px] text-sky-600 hover:underline">파일 열기 <span aria-hidden>↗</span></a> : null}
+                  <span className="min-w-0 break-all font-mono text-sm font-semibold text-ink">{safeTitle}</span>
+                  {safeUrl ? <a href={safeUrl} target="_blank" rel="noreferrer" className="ml-auto inline-flex shrink-0 items-center gap-1 font-mono text-[11px] text-sky-600 hover:underline">파일 열기 <span aria-hidden>↗</span></a> : null}
                 </div>
                 {/* 노출 위치 — 어느 URL(위 파일 열기) · 어느 부분(카테고리별 라인 딥링크 url#L<line>). 값·문맥 미표시. */}
                 <div className="mt-2 rounded-lg border border-rose-200 bg-white/50 p-2">
@@ -791,8 +847,8 @@ function CustomerPiiPanel({ findings, onChanged }: { findings: RemediableFinding
                               {lines.length > 0 ? (
                                 <>
                                   {lines.map((ln) => (
-                                    f.referenceUrl
-                                      ? <a key={ln} href={`${f.referenceUrl.split("#")[0]}#L${ln}`} target="_blank" rel="noreferrer" title="공개 코드의 해당 라인으로 이동(대략 위치)" className="inline-flex items-center gap-0.5 rounded border border-sky-300 bg-sky-50 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-sky-700 hover:underline">L{ln}<span aria-hidden>↗</span></a>
+                                    safeUrl
+                                      ? <a key={ln} href={`${safeUrl.split("#")[0]}#L${ln}`} target="_blank" rel="noreferrer" title="공개 코드의 해당 라인으로 이동(대략 위치)" className="inline-flex items-center gap-0.5 rounded border border-sky-300 bg-sky-50 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-sky-700 hover:underline">L{ln}<span aria-hidden>↗</span></a>
                                       : <span key={ln} className="rounded border border-slate-300 bg-slate-50 px-1.5 py-0.5 font-mono text-[10px] text-slate-600">L{ln}</span>
                                   ))}
                                 </>
