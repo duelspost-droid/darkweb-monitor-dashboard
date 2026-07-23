@@ -630,3 +630,24 @@ cd /Users/hk/darkweb-monitor-dashboard && npm run supabase:pull
   - `net._http_response` 최신: **status_code NULL, "Timeout of 120000 ms reached"** — **Edge 함수가 pg_net 120s 내 미응답**. 원인 = 순차 수집기 + WORKER_RESOURCE_LIMIT(Edge 워커 강제종료 → scan_runs 기록 없이 사망). `6c252be` 병렬화가 바로 이 수정인데 **Edge 재배포가 안 된 상태**였음 → **오늘 배포로 해결됐을 것**.
   - 수동 트리거는 auto모드 분류기 차단(프로덕션 mutation) → **검증은 오늘 밤 크론(15:00 UTC=자정 KST) 후 scan_runs 확인**. 즉시 확인하려면 사용자가 SQL Editor Run: `DO $$ DECLARE cmd text; BEGIN SELECT command INTO cmd FROM cron.job WHERE jobid = 1; EXECUTE cmd; END $$;`
 - **✅ 크론 복구 확증(같은 날 밤)**: 사용자가 SQL Editor에서 수동 트리거 실행(`DO $$ ... EXECUTE cmd $$;` → "Success. No rows returned") → `net._http_response`에 **HTTP 200** + `{"ok":true,"status":"ok","total":72,"newCount":1,"infostealer":{"domains":4,"total":828},...}` **2건**(id 49·50) — **새 Edge 코드가 pg_net 120s 내 완주**(이전엔 전부 타임아웃). 대시보드 라이브 확인: 배너 **"스캔 정상"**, **최근 스캔 2026. 07. 24.**, 수집 출처 **7종**(GitLab 포함), 신규 1건. → WORKER_RESOURCE_LIMIT/타임아웃 문제 해소, 내일부터 자정 크론 정상 예상. (그래도 07-25 아침 scan_runs 자동행 1회 확인 권장 — 수동과 크론 경로 동일하므로 저위험.)
+
+## 22. 세션 로그 — 2026-07-23 (밤) 디자인 2026 리프레시 (Refined Glass Minimal)
+
+> 사용자 "디자인을 최신 스타일로 최대한 세련되게 바꿔봐". 멀티에이전트 워크플로(4방향 제안 → 4렌즈 심사)로 방향 선정 후 구현.
+
+### 방향 선정 (커밋 `c881bdd`)
+- 4개 후보(Refined Glass Minimal / SOC Command Center / Premium Fintech Executive=Obsidian / Ambient Aurora Mesh)를 병렬 제안 → 4렌즈(임원프리미엄·2026최신감·실용성·구현리스크) 채점. **우승 = Refined Glass Minimal — Quiet Premium SOC (8.75/10, 3/4 렌즈 1위)**. 컨셉: '화려함이 아닌 조용함으로 프리미엄'. 심사·스펙 원본: `tasks/wcdo4q98o.output`.
+
+### 적용 범위 (제약 준수 — DashboardClient 마크업 불가침, globals.css+프리미티브4개+layout+tailwind.config만)
+- **웹폰트 실로드**(layout.tsx `<head>`): Pretendard Variable(jsdelivr dynamic-subset) + JetBrains Mono(Google) → **Windows Malgun 폴백 촌스러움 제거**. 라이브 `document.fonts.check` 둘 다 **true** 확인. CDN 차단 시 시스템폰트 조용히 폴백.
+- **globals.css 전면 리라이트**: ①서피스=그라디언트 헤어라인 보더(padding-box/border-box 2중배경)+3레이어 섀도+호버 시안 글로우, radius 16px ②히어로=오로라 transform 애니메이션 **은퇴** → 정적 듀얼 라디얼 글로우 + 18s opacity breathe만, 헤어라인 보더, sheen 9s→14s, 그레인 0.6→0.35 ③stat-tile=3px풀레일 → 2px 페이드레일 + 좌상단 코너 틴트(color-mix) + 숫자 white→ice 그라디언트 클립 ④chip=inset currentColor 헤어라인+weight600 ⑤barlist=16px→10px pill 트랙 + `--bar-color` 변수 그라디언트 필 ⑥마감=`:focus-visible` 링, 커스텀 스크롤바(트랙과 띄운 필), 리맵레이어 보더를 순수화이트→슬레이트 틴트, AA 텍스트 보정(slate-400/500 상향).
+- **프리미티브**: StatTile 아이콘칩 솔리드 → 틴티드 글래스(color-mix 16%+헤어라인), 기본 accent `#0f766e`→`#2dd4bf`. BarList PALETTE를 다크용 밝은 톤 8색으로 교체 + `--bar-color` 변수 전달. tailwind.config에 fontFamily.sans/mono + 토큰(ink/panel/line/muted/berry/cobalt) 신팔레트 동기화.
+- **DashboardClient 색상값만 치환**(마크업 불변, replace_all): 라이트용 hex `#be123c/#b45309/#3157a4/#0f766e` → 다크톤 `#fb7185/#fbbf24/#60a5fa/#2dd4bf` (SEVERITY_META 4색·StatTile accent 3곳·인포스틸러 세그먼트 3색). **color-mix는 전부 rgba 폴백 병기**(구형 브라우저), prefers-reduced-motion 유지.
+
+### 검증
+- `next build`(Turbopack) 통과 — **대괄호 정규식 tailwind 파손 없음**(globals.css 신규 셀렉터도 안전). Pages 배포 **success**(run 30027513404, 48s).
+- **라이브 육안(데스크톱 1161px + 하단 접힘패널 + 모바일 미디어쿼리)**: 히어로 그라디언트 타이포·헤어라인 보더, KPI 3타일 코너틴트·틴티드 아이콘칩·그라디언트 숫자, 심각도/도메인 바리스트 신팔레트(rose/amber/cobalt/teal 선명), 계정 상세·PII 딥링크·인포스틸러 접힘패널·푸터 전부 새 스타일 일관. `document.fonts.check` Pretendard·JetBrains **true**, stat-value background-clip=text, 가로 오버플로 **0**, `(max-width:640px)` 미디어쿼리 활성. (⚠️ 실 Chrome 창 최소폭 ~500px 제한으로 375 직접캡처는 불가 — CSS 미디어쿼리·이전 세션 375 검증으로 갈음.)
+
+### 남은 확인/후속
+- [ ] 사내망(임원 PC)에서 jsdelivr/Google Fonts CDN 차단 여부 실기기 확인 — 차단 시 `public/fonts` woff2 셀프호스팅 전환.
+- [ ] 실기기 모바일(375px 이하) 육안(폰트·헤어라인·바리스트 렌더).
