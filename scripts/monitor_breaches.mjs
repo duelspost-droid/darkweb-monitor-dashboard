@@ -983,6 +983,78 @@ async function loadSupabase(scan) {
   }
 }
 
+// ── 보안 뉴스 수집 (Google News RSS, 무료·서버사이드) → security_news (Edge 미러) ──
+const NEWS_QUERIES = [
+  { q: "금융 보안", cat: "금융보안", finance: true },
+  { q: "은행 해킹 유출", cat: "금융보안", finance: true },
+  { q: "개인정보 유출", cat: "개인정보", finance: false },
+  { q: "랜섬웨어", cat: "랜섬웨어", finance: false },
+  { q: "다크웹", cat: "다크웹", finance: false },
+  { q: "사이버 공격", cat: "사이버공격", finance: false },
+  { q: "보안 취약점 제로데이", cat: "취약점", finance: false },
+];
+const NEWS_FINANCE_RE = /금융|은행|카드사|증권|보험|핀테크|캐피탈|저축은행|가상자산|암호화폐|코인|거래소|간편결제|페이|대출|투자|자산운용|JB금융|전북은행|광주은행|우리금융|우리은행/;
+function newsDecodeEntities(s) {
+  return s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#0?39;/g, "'").replace(/&apos;/g, "'").replace(/&amp;/g, "&");
+}
+function newsXmlTag(block, name) {
+  const start = block.indexOf("<" + name);
+  if (start < 0) return "";
+  const gt = block.indexOf(">", start);
+  const end = block.indexOf("</" + name + ">", gt);
+  if (gt < 0 || end < 0) return "";
+  const v = block.slice(gt + 1, end).replace(/^<!\[CDATA\[/, "").replace(/\]\]>$/, "");
+  return newsDecodeEntities(v.trim());
+}
+async function collectAndLoadSecurityNews() {
+  const url = process.env.SUPABASE_URL?.trim();
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+  if (!url || !key) return;
+  try {
+    const seen = new Set();
+    const rows = [];
+    await Promise.allSettled(NEWS_QUERIES.map(async (gq) => {
+      const rssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(gq.q)}&hl=ko&gl=KR&ceid=KR:ko`;
+      const res = await fetchT(rssUrl, { headers: { "user-agent": "Mozilla/5.0 (compatible; darkweb-monitor)" } }, 8000);
+      if (!res.ok) return;
+      const xml = await res.text();
+      const parts = xml.split("<item>");
+      let taken = 0;
+      for (let i = 1; i < parts.length && taken < 12; i++) {
+        const b = parts[i].split("</item>")[0];
+        const rawTitle = newsXmlTag(b, "title");
+        const link = newsXmlTag(b, "link");
+        if (!rawTitle || !link) continue;
+        const li = rawTitle.lastIndexOf(" - ");
+        const title = (li > 0 ? rawTitle.slice(0, li) : rawTitle).trim();
+        const source = (li > 0 ? rawTitle.slice(li + 3) : newsXmlTag(b, "source")).trim();
+        const pub = newsXmlTag(b, "pubDate");
+        let publishedAt = null;
+        if (pub) { const d = new Date(pub); if (!isNaN(d.getTime())) publishedAt = d.toISOString(); }
+        const idPart = link.split("/articles/")[1]?.split("?")[0] || "";
+        const news_id = (idPart || title).slice(0, 200);
+        if (!title || seen.has(news_id)) continue;
+        seen.add(news_id);
+        rows.push({ news_id, title: title.slice(0, 300), url: link, source: source.slice(0, 80), category: gq.cat, is_finance: gq.finance || NEWS_FINANCE_RE.test(title), published_at: publishedAt });
+        taken++;
+      }
+    }));
+    if (!rows.length) return;
+    const sbHeaders = { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates,return=minimal" };
+    const fetchedAt = new Date().toISOString();
+    const res = await fetchT(`${url}/rest/v1/security_news?on_conflict=news_id`, {
+      method: "POST", headers: sbHeaders, body: JSON.stringify(rows.map((r) => ({ ...r, fetched_at: fetchedAt }))),
+    });
+    if (res.ok) console.log(`[supabase] security_news upsert ${rows.length}행`);
+    else console.warn(`[supabase] security_news 적재 실패 HTTP ${res.status} (018 마이그레이션 확인)`);
+    // fetched_at 기준 정리(NOT NULL·매 배치 갱신) — published_at NULL 행도 회수됨.
+    const cutoff = new Date(Date.now() - 14 * 86400000).toISOString();
+    await fetchT(`${url}/rest/v1/security_news?fetched_at=lt.${cutoff}`, { method: "DELETE", headers: { ...sbHeaders, Prefer: "return=minimal" } });
+  } catch (err) {
+    console.warn(`[supabase] 보안 뉴스 건너뜀: ${err.message}`);
+  }
+}
+
 async function main() {
   await ensureDirs();
   const nowIso = new Date().toISOString();
@@ -1178,6 +1250,8 @@ async function main() {
   await writeFile(join(historyDir, `breach_scan_${todayStamp()}.json`), JSON.stringify(scan, null, 2), "utf8");
   await writeGenerated(scan);
   await loadSupabase(scan);
+  // 보안 뉴스 — 유출 스캔과 격리 + 하드 상한(본문 스트림 정체로 CLI 가 hang 하지 않게).
+  await Promise.race([collectAndLoadSecurityNews(), new Promise((r) => setTimeout(r, 20000))]);
 
   console.log(
     `[monitor] 완료 — 총 ${summary.total}건 (신규 ${summary.newCount}, ` +
