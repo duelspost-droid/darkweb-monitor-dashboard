@@ -19,6 +19,7 @@ import {
   ShieldCheck,
   Sparkles,
   Settings,
+  Newspaper,
   X,
 } from "lucide-react";
 import type { Session } from "@supabase/supabase-js";
@@ -521,6 +522,164 @@ async function fetchScan(): Promise<BreachScan> {
   };
 }
 
+// ─────────────────────────────────────────────────────────────
+// 보안 뉴스 — 배치가 Google News RSS(금융·보안)에서 수집(security_news).
+// 공개 뉴스라 anon 읽기 허용 → 로그인 화면 미리보기에도 사용.
+// ─────────────────────────────────────────────────────────────
+type NewsItem = { id: string; title: string; url: string; source: string; category: string; isFinance: boolean; publishedAt: string | null };
+
+// 외부 링크 방어: http(s) 만 허용(악의적 javascript:/data: URL 차단). 아니면 링크 제거.
+function safeHttpUrl(u: string): string | undefined {
+  return /^https?:\/\//i.test(u) ? u : undefined;
+}
+
+async function fetchSecurityNews(): Promise<NewsItem[]> {
+  const res = await supabase
+    .from("security_news")
+    .select("news_id,title,url,source,category,is_finance,published_at")
+    .order("published_at", { ascending: false, nullsFirst: false }) // 무날짜 행이 조회창 상단을 잠식하지 않게
+    .limit(80);
+  if (res.error || !res.data) return [];
+  return res.data
+    .map((r) => ({
+      id: r.news_id, title: r.title, url: safeHttpUrl(r.url ?? ""), source: r.source ?? "",
+      category: r.category ?? "", isFinance: !!r.is_finance, publishedAt: r.published_at ?? null,
+    }))
+    .filter((n): n is NewsItem => !!n.url && !!n.title);
+}
+
+// 금융 우선 → 최신순 정렬(담당자 참고 우선순위)
+function sortNews(items: NewsItem[]): NewsItem[] {
+  return [...items].sort((a, b) => {
+    if (a.isFinance !== b.isFinance) return a.isFinance ? -1 : 1;
+    return (b.publishedAt ?? "").localeCompare(a.publishedAt ?? "");
+  });
+}
+
+function relTime(iso: string | null): string {
+  if (!iso) return "";
+  const t = new Date(iso).getTime();
+  if (isNaN(t)) return "";
+  const m = Math.floor((Date.now() - t) / 60000);
+  if (m < 1) return "방금";
+  if (m < 60) return `${m}분 전`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}시간 전`;
+  const d = Math.floor(h / 24);
+  if (d < 7) return `${d}일 전`;
+  return new Date(iso).toLocaleDateString("ko-KR", { month: "numeric", day: "numeric" });
+}
+
+const NEWS_CAT_CLS: Record<string, string> = {
+  금융보안: "border-amber-300 bg-amber-100 text-amber-700",
+  개인정보: "border-rose-300 bg-rose-100 text-rose-700",
+  랜섬웨어: "border-rose-300 bg-rose-100 text-rose-700",
+  다크웹: "border-violet-100 text-violet-700",
+  취약점: "border-sky-300 bg-sky-100 text-sky-700",
+  사이버공격: "border-sky-300 bg-sky-100 text-sky-700",
+};
+const NEWS_FILTERS = ["전체", "금융", "개인정보", "랜섬웨어", "다크웹", "취약점", "사이버공격"];
+
+// 대시보드 '오늘의 보안 뉴스' 패널 — 카테고리 필터 + 금융 우선 목록.
+function SecurityNewsPanel({ news }: { news: NewsItem[] }) {
+  const [filter, setFilter] = useState("전체");
+  const sorted = sortNews(news);
+  const filtered = sorted.filter((n) =>
+    filter === "전체" ? true : filter === "금융" ? n.isFinance : n.category === filter
+  );
+  const shown = filtered.slice(0, 16);
+  // '갱신' 시각 = 전체 최신 게시시각(정렬은 금융 우선이라 find 로는 최신 금융기사가 잡혀 어긋남).
+  const latest = news.reduce<string | null>((m, n) => (n.publishedAt && (!m || n.publishedAt > m) ? n.publishedAt : m), null);
+  return (
+    <Panel
+      title="오늘의 보안 뉴스"
+      subtitle="금융·보안 이슈 — 매일 자정 자동 갱신. 제목을 누르면 기사로 이동합니다."
+      right={
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-sky-300 bg-sky-100 px-3 py-1 text-xs font-bold text-sky-700">
+          <Newspaper size={13} aria-hidden /> {news.length ? `${news.length}건 · ${relTime(latest)} 갱신` : "수집 대기"}
+        </span>
+      }
+    >
+      {news.length === 0 ? (
+        <p className="flex items-center gap-2 py-4 text-sm text-muted">
+          <Newspaper size={16} className="shrink-0 text-sky-500" aria-hidden /> 아직 수집된 뉴스가 없습니다 — 다음 자정 배치에서 채워집니다.
+        </p>
+      ) : (
+        <>
+          <div className="mb-3 flex flex-wrap gap-1.5">
+            {NEWS_FILTERS.map((f) => {
+              const active = filter === f;
+              const count = f === "전체" ? sorted.length : f === "금융" ? sorted.filter((n) => n.isFinance).length : sorted.filter((n) => n.category === f).length;
+              if (f !== "전체" && count === 0) return null; // 0건 분류(금융 포함)는 칩 숨김
+              return (
+                <button
+                  key={f}
+                  type="button"
+                  onClick={() => setFilter(f)}
+                  className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold transition ${active ? "border-sky-400 bg-sky-100 text-sky-700" : "border-slate-200 text-muted hover:bg-slate-100"}`}
+                >
+                  {f}{count ? ` ${count}` : ""}
+                </button>
+              );
+            })}
+          </div>
+          {shown.length === 0 ? (
+            <p className="py-4 text-sm text-muted">해당 분류의 뉴스가 없습니다.</p>
+          ) : null}
+          <ul className="max-h-[560px] divide-y divide-slate-100 overflow-y-auto">
+            {shown.map((n) => (
+              <li key={n.id} className="flex flex-wrap items-center gap-x-2.5 gap-y-1 py-2.5">
+                {n.isFinance ? <span className="rounded-full border border-amber-300 bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">금융</span> : null}
+                <span className={`rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${NEWS_CAT_CLS[n.category] ?? "border-slate-200 text-muted"}`}>{n.category || "보안"}</span>
+                <a
+                  href={n.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="min-w-0 flex-1 text-sm font-medium text-ink hover:text-sky-600 hover:underline"
+                >
+                  {n.title}
+                </a>
+                <span className="shrink-0 font-mono text-[11px] text-muted">{n.source}{n.publishedAt ? ` · ${relTime(n.publishedAt)}` : ""}</span>
+              </li>
+            ))}
+          </ul>
+          {filtered.length > shown.length ? (
+            <p className="pt-2 text-center text-[11px] text-muted">외 {filtered.length - shown.length}건 더 · 필터로 좁혀 보세요</p>
+          ) : null}
+        </>
+      )}
+      <p className="mt-3 flex gap-2 border-t border-slate-100 pt-3 text-[11px] leading-5 text-muted">
+        <Info size={13} className="mt-0.5 shrink-0 text-sky-500" aria-hidden />
+        <span>출처: Google 뉴스(금융보안·개인정보·랜섬웨어·다크웹·취약점 등). 외부 기사 링크이며 내용은 각 매체 책임입니다.</span>
+      </p>
+    </Panel>
+  );
+}
+
+// 로그인 화면 미리보기 — 금융·보안 헤드라인 상위 몇 개(anon 읽기). 로그인 전 아침 참고용.
+function LoginNewsPreview() {
+  const [items, setItems] = useState<NewsItem[] | null>(null);
+  useEffect(() => {
+    fetchSecurityNews().then((n) => setItems(sortNews(n).slice(0, 5))).catch(() => setItems([]));
+  }, []);
+  if (!items || items.length === 0) return null;
+  return (
+    <div className="mx-auto mt-6 w-full max-w-md rounded-2xl border border-slate-200 bg-white/50 p-4">
+      <div className="mb-2 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide text-muted">
+        <Newspaper size={13} className="text-sky-500" aria-hidden /> 오늘의 보안 뉴스
+      </div>
+      <ul className="space-y-1.5">
+        {items.map((n) => (
+          <li key={n.id} className="flex items-start gap-1.5 text-[12px] leading-5">
+            {n.isFinance ? <span className="mt-0.5 shrink-0 rounded border border-amber-300 bg-amber-100 px-1 text-[9px] font-bold text-amber-700">금융</span> : null}
+            <a href={n.url} target="_blank" rel="noreferrer" className="text-slate-700 hover:text-sky-600 hover:underline">{n.title}</a>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function LoginGate({ onSignedIn }: { onSignedIn: () => void }) {
   // 고정 관리자 이메일이 설정돼 있으면 비밀번호만 받는다.
   // 미설정(또는 "다른 계정") 일 때만 이메일 입력을 노출.
@@ -548,7 +707,7 @@ function LoginGate({ onSignedIn }: { onSignedIn: () => void }) {
   }
 
   return (
-    <div className="flex min-h-[70vh] items-center justify-center px-4">
+    <div className="flex min-h-[70vh] flex-col items-center justify-center px-4 py-10">
       <form onSubmit={submit} className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-7 shadow-xl">
         <div className="mb-5 flex items-center gap-2">
           <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-cyan-600 text-white">
@@ -618,6 +777,7 @@ function LoginGate({ onSignedIn }: { onSignedIn: () => void }) {
           승인된 관리자만 접근할 수 있습니다. 데이터는 로그인 후에만 조회됩니다(RLS 보호).
         </p>
       </form>
+      <LoginNewsPreview />
     </div>
   );
 }
@@ -1053,6 +1213,7 @@ export default function DashboardClient() {
   const [session, setSession] = useState<Session | null>(null);
   const [ready, setReady] = useState(false);
   const [scan, setScan] = useState<BreachScan | null>(null);
+  const [news, setNews] = useState<NewsItem[]>([]);
   const [loadErr, setLoadErr] = useState("");
   const [mustSetPw, setMustSetPw] = useState(false); // 초대/재설정 링크로 진입 → 비번 설정 필요
   const [showSetPw, setShowSetPw] = useState(false); // 로그인 상태에서 수동 변경
@@ -1083,6 +1244,7 @@ export default function DashboardClient() {
     fetchScan()
       .then(setScan)
       .catch((e) => setLoadErr(e?.message ?? "데이터 조회 실패"));
+    fetchSecurityNews().then(setNews).catch(() => setNews([])); // 뉴스 실패는 대시보드에 무영향
   }, []);
 
   useEffect(() => {
@@ -1257,6 +1419,8 @@ export default function DashboardClient() {
         <StatTile label="유출 노출 계정" value={acctTotal} unit="계정" icon={<ShieldAlert size={18} />} accent="#fb7185" trend={{ label: acctOpen > 0 ? `조치 필요 ${acctOpen}` : "모두 조치됨", dir: acctOpen > 0 ? "down" : "up" }} sub={`조치완료 ${acctDone} · 노출 ${summary.total}건`} />
         <StatTile label="이번 스캔 신규" value={summary.newCount} unit="건" icon={<Sparkles size={18} />} accent="#fbbf24" trend={{ label: summary.newCount > 0 ? "신규 발견" : "변동 없음", dir: summary.newCount > 0 ? "down" : "neutral" }} sub="직전 대비" />
       </div>
+
+      <SecurityNewsPanel news={news} />
 
       <Panel title="계열사별 위험 개요" subtitle="회사별 유출 계정 현황" right={<span className="chip chip-neutral"><Globe size={13} className="mr-1 inline" aria-hidden /> {overview.length}개사</span>}>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">

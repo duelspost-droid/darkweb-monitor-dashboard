@@ -918,6 +918,86 @@ async function sbDeleteStaleHosts(scanTag: string) {
   if (!res.ok) console.warn(`infostealer_hosts stale delete HTTP ${res.status}`);
 }
 
+// ── 보안 뉴스 수집 (Google News RSS, 무료·키불요·서버사이드=CORS 무관) → security_news ──
+// 금융·보안 이슈를 매일 배치로 수집해 대시보드 '오늘의 보안 뉴스'에 노출(담당자 아침 참고용).
+// 비민감 공개 뉴스 링크만 저장. 유출 스캔 본체와 완전 격리(자체 timeout + 호출부 try/catch).
+const NEWS_QUERIES: { q: string; cat: string; finance: boolean }[] = [
+  { q: "금융 보안", cat: "금융보안", finance: true },
+  { q: "은행 해킹 유출", cat: "금융보안", finance: true },
+  { q: "개인정보 유출", cat: "개인정보", finance: false },
+  { q: "랜섬웨어", cat: "랜섬웨어", finance: false },
+  { q: "다크웹", cat: "다크웹", finance: false },
+  { q: "사이버 공격", cat: "사이버공격", finance: false },
+  { q: "보안 취약점 제로데이", cat: "취약점", finance: false },
+];
+const NEWS_FINANCE_RE = /금융|은행|카드사|증권|보험|핀테크|캐피탈|저축은행|가상자산|암호화폐|코인|거래소|간편결제|페이|대출|투자|자산운용|JB금융|전북은행|광주은행|우리금융|우리은행/;
+function newsDecodeEntities(s: string): string {
+  return s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#0?39;/g, "'").replace(/&apos;/g, "'").replace(/&amp;/g, "&");
+}
+function newsXmlTag(block: string, name: string): string {
+  const start = block.indexOf("<" + name);
+  if (start < 0) return "";
+  const gt = block.indexOf(">", start);
+  const end = block.indexOf("</" + name + ">", gt);
+  if (gt < 0 || end < 0) return "";
+  const v = block.slice(gt + 1, end).replace(/^<!\[CDATA\[/, "").replace(/\]\]>$/, "");
+  return newsDecodeEntities(v.trim());
+}
+interface NewsRow { news_id: string; title: string; url: string; source: string; category: string; is_finance: boolean; published_at: string | null; }
+async function collectSecurityNews(): Promise<{ rows: NewsRow[]; count: number }> {
+  const seen = new Set<string>();
+  const rows: NewsRow[] = [];
+  await Promise.allSettled(NEWS_QUERIES.map(async (gq) => {
+    const url = `https://news.google.com/rss/search?q=${encodeURIComponent(gq.q)}&hl=ko&gl=KR&ceid=KR:ko`;
+    const res = await fetchT(url, { headers: { "User-Agent": "Mozilla/5.0 (compatible; darkweb-monitor)" } }, 8000);
+    if (!res.ok) return;
+    const xml = await res.text();
+    const parts = xml.split("<item>");
+    let taken = 0;
+    for (let i = 1; i < parts.length && taken < 12; i++) {
+      const b = parts[i].split("</item>")[0];
+      const rawTitle = newsXmlTag(b, "title");
+      const link = newsXmlTag(b, "link");
+      if (!rawTitle || !link) continue;
+      const li = rawTitle.lastIndexOf(" - "); // Google 뉴스는 "제목 - 매체" 형식
+      const title = (li > 0 ? rawTitle.slice(0, li) : rawTitle).trim();
+      const source = (li > 0 ? rawTitle.slice(li + 3) : newsXmlTag(b, "source")).trim();
+      const pub = newsXmlTag(b, "pubDate");
+      let publishedAt: string | null = null;
+      if (pub) { const d = new Date(pub); if (!isNaN(d.getTime())) publishedAt = d.toISOString(); }
+      const idPart = link.split("/articles/")[1]?.split("?")[0] || "";
+      const news_id = (idPart || title).slice(0, 200);
+      if (!title || seen.has(news_id)) continue;
+      seen.add(news_id);
+      rows.push({
+        news_id, title: title.slice(0, 300), url: link, source: source.slice(0, 80),
+        category: gq.cat, is_finance: gq.finance || NEWS_FINANCE_RE.test(title), published_at: publishedAt,
+      });
+      taken++;
+    }
+  }));
+  return { rows, count: rows.length };
+}
+async function sbUpsertNews(rows: NewsRow[]) {
+  if (!rows.length) return;
+  const fetchedAt = new Date().toISOString();
+  const res = await fetchT(`${SUPABASE_URL}/rest/v1/security_news?on_conflict=news_id`, {
+    method: "POST",
+    headers: { ...sbHeaders, Prefer: "resolution=merge-duplicates,return=minimal" },
+    body: JSON.stringify(rows.map((r) => ({ ...r, fetched_at: fetchedAt }))),
+  });
+  if (!res.ok) throw new Error(`security_news upsert HTTP ${res.status} ${(await res.text()).slice(0, 150)}`);
+}
+async function sbPruneNews() {
+  // 14일간 재수집 안 된 뉴스 정리(테이블 경량 유지). fetched_at 기준(매 배치 갱신 + NOT NULL)이라
+  // published_at 이 NULL 인 행도 반드시 회수된다(published_at 기준이면 NULL<cutoff=unknown 으로 영구 잔존).
+  const cutoff = new Date(Date.now() - 14 * 86400000).toISOString();
+  const res = await fetchT(`${SUPABASE_URL}/rest/v1/security_news?fetched_at=lt.${cutoff}`, {
+    method: "DELETE", headers: { ...sbHeaders, Prefer: "return=minimal" },
+  });
+  if (!res.ok) console.warn(`security_news prune HTTP ${res.status}`);
+}
+
 Deno.serve(async (req) => {
   // 인증: verify_jwt=false 로 두고 공유 시크릿(SCAN_SECRET) 헤더로 보호.
   // (pg_cron 이 x-scan-secret 헤더로 호출. SCAN_SECRET 미설정 시 검사 생략.)
@@ -939,6 +1019,18 @@ Deno.serve(async (req) => {
   const provenanceExtra: { name: string; kind: string; endpoint: string; count: number; scannedAt: string }[] = [];
   let infostealerHosts: InfostealerHostRow[] = [];
   let prevBreachCount = 0; // 직전 breach_findings 건수 — 부분 스캔 가드용(stale-delete 스킵 판단)
+
+  // 보안 뉴스 — 유출 스캔과 병렬 실행(네트워크 대기 겹쳐 월클록 추가 최소화). 완전 격리(자체 catch).
+  let newsErr = "";
+  const newsTask: Promise<number> = (async () => {
+    try {
+      const news = await collectSecurityNews();
+      if (!news.count) return 0;
+      await sbUpsertNews(news.rows);
+      await sbPruneNews();
+      return news.count;
+    } catch (e) { newsErr = (e as Error).message; return 0; }
+  })();
 
   try {
     if (HIBP_API_KEY && MONITORED_DOMAINS.length) {
@@ -1103,6 +1195,16 @@ Deno.serve(async (req) => {
     await sbDeleteStaleHosts(scanTag);
   }
 
+  // 병렬로 시작한 뉴스 수집 완료 대기(이미 스캔과 겹쳐 실행됨).
+  // ⚠️ 하드 상한 20s — fetchT 는 '헤더 수신'까지만 abort 보호하므로 본문 스트림이 정체되면
+  //    newsTask 가 영영 안 끝날 수 있다. 그 hang 이 유출 스캔 응답을 인질로 잡아 함수 전체가
+  //    WORKER_RESOURCE_LIMIT/타임아웃으로 죽는 것을 막는다(초과 시 이번 배치 뉴스만 건너뜀).
+  const newsCount = await Promise.race([
+    newsTask,
+    new Promise<number>((resolve) => setTimeout(() => resolve(0), 20000)),
+  ]);
+  if (newsErr) note = (note ? note + " | " : "") + `보안 뉴스 수집 실패: ${newsErr}`;
+
   const summary = { critical: 0, high: 0, medium: 0, low: 0 };
   let newCount = 0;
   for (const f of findings) { summary[f.severity as keyof typeof summary]++; if (f.is_new) newCount++; }
@@ -1115,6 +1217,9 @@ Deno.serve(async (req) => {
   ];
   if (infostealer.length) {
     sources.push({ name: "Hudson Rock Cavalier", kind: "infostealer", endpoint: "cavalier.hudsonrock.com /search-by-domain", count: infTotal, scannedAt: nowIso });
+  }
+  if (newsCount) {
+    sources.push({ name: "보안 뉴스 (Google News)", kind: "news", endpoint: "news.google.com /rss/search", count: newsCount, scannedAt: nowIso });
   }
 
   await sbInsertScanRun({
@@ -1130,6 +1235,6 @@ Deno.serve(async (req) => {
 
   return new Response(JSON.stringify({
     ok: status !== "error", status, source, total: findings.length, newCount, summary,
-    infostealer: { domains: infostealer.length, total: infTotal }, infostealerHosts: infostealerHosts.length, sources, note,
+    infostealer: { domains: infostealer.length, total: infTotal }, infostealerHosts: infostealerHosts.length, news: newsCount, sources, note,
   }), { headers: { "Content-Type": "application/json" } });
 });
