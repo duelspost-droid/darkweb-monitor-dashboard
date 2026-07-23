@@ -85,10 +85,10 @@ const piiSafeText = (s?: string) => (s ? redactPii(s).text : (s ?? ""));
 const piiSafeUrl = (u?: string) => (u && !redactPii(u).redacted ? u : undefined);
 
 const SEVERITY_META: Record<BreachSeverity, { label: string; color: string; chip: string }> = {
-  critical: { label: "심각", color: "#be123c", chip: "bg-rose-100 text-rose-700 border-rose-300" },
-  high: { label: "높음", color: "#b45309", chip: "bg-amber-100 text-amber-700 border-amber-300" },
-  medium: { label: "보통", color: "#3157a4", chip: "bg-sky-100 text-sky-700 border-sky-300" },
-  low: { label: "낮음", color: "#0f766e", chip: "bg-teal-100 text-teal-700 border-teal-300" },
+  critical: { label: "심각", color: "#fb7185", chip: "bg-rose-100 text-rose-700 border-rose-300" },
+  high: { label: "높음", color: "#fbbf24", chip: "bg-amber-100 text-amber-700 border-amber-300" },
+  medium: { label: "보통", color: "#60a5fa", chip: "bg-sky-100 text-sky-700 border-sky-300" },
+  low: { label: "낮음", color: "#2dd4bf", chip: "bg-teal-100 text-teal-700 border-teal-300" },
 };
 const SEVERITY_RANK: Record<string, number> = { low: 0, medium: 1, high: 2, critical: 3 };
 
@@ -1253,9 +1253,9 @@ export default function DashboardClient() {
       />
 
       <div className="stat-grid">
-        <StatTile label="모니터링 도메인" value={scan.domains.length} unit="개" icon={<Globe size={18} />} accent="#3157a4" sub={scan.domains.join(", ") || "미설정"} />
-        <StatTile label="유출 노출 계정" value={acctTotal} unit="계정" icon={<ShieldAlert size={18} />} accent="#be123c" trend={{ label: acctOpen > 0 ? `조치 필요 ${acctOpen}` : "모두 조치됨", dir: acctOpen > 0 ? "down" : "up" }} sub={`조치완료 ${acctDone} · 노출 ${summary.total}건`} />
-        <StatTile label="이번 스캔 신규" value={summary.newCount} unit="건" icon={<Sparkles size={18} />} accent="#b45309" trend={{ label: summary.newCount > 0 ? "신규 발견" : "변동 없음", dir: summary.newCount > 0 ? "down" : "neutral" }} sub="직전 대비" />
+        <StatTile label="모니터링 도메인" value={scan.domains.length} unit="개" icon={<Globe size={18} />} accent="#60a5fa" sub={scan.domains.join(", ") || "미설정"} />
+        <StatTile label="유출 노출 계정" value={acctTotal} unit="계정" icon={<ShieldAlert size={18} />} accent="#fb7185" trend={{ label: acctOpen > 0 ? `조치 필요 ${acctOpen}` : "모두 조치됨", dir: acctOpen > 0 ? "down" : "up" }} sub={`조치완료 ${acctDone} · 노출 ${summary.total}건`} />
+        <StatTile label="이번 스캔 신규" value={summary.newCount} unit="건" icon={<Sparkles size={18} />} accent="#fbbf24" trend={{ label: summary.newCount > 0 ? "신규 발견" : "변동 없음", dir: summary.newCount > 0 ? "down" : "neutral" }} sub="직전 대비" />
       </div>
 
       <Panel title="계열사별 위험 개요" subtitle="회사별 유출 계정 현황" right={<span className="chip chip-neutral"><Globe size={13} className="mr-1 inline" aria-hidden /> {overview.length}개사</span>}>
@@ -1417,9 +1417,9 @@ export default function DashboardClient() {
             <div className="grid gap-3 md:grid-cols-2">
               {infostealer.filter((i) => i.total > 0).sort((a, b) => b.total - a.total).map((i) => {
                 const seg = [
-                  { label: "임직원", v: i.employees, c: "#be123c" },
-                  { label: "사용자", v: i.users, c: "#b45309" },
-                  { label: "서드파티", v: i.thirdParties, c: "#3157a4" },
+                  { label: "임직원", v: i.employees, c: "#fb7185" },
+                  { label: "사용자", v: i.users, c: "#fbbf24" },
+                  { label: "서드파티", v: i.thirdParties, c: "#60a5fa" },
                 ].filter((s) => s.v > 0);
                 const segTotal = seg.reduce((s, x) => s + x.v, 0) || 1;
                 return (

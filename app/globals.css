@@ -2,20 +2,29 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ═══════════════════════════════════════════════════════════════
+   Refined Glass Minimal — Quiet Premium SOC (2026 리프레시)
+   원칙: 조용한 프리미엄. 모션은 절제(hero breathe + 라이브 도트 2개뿐),
+   시안 액센트는 면이 아닌 '가장자리'(헤어라인·글로우·포커스)에만.
+   ═══════════════════════════════════════════════════════════════ */
 :root {
-  --bg: #0a0e15;
-  --panel: #11161f;
-  --panel-2: #161d28;
-  --line: rgba(255, 255, 255, 0.09);
-  --line-strong: rgba(255, 255, 255, 0.14);
-  --foreground: #e7ecf5;
-  --muted: #8c97a8;
+  --bg: #080b12;
+  --panel: #10151f;
+  --panel-hi: #121826;
+  --panel-lo: #0e131c;
+  --panel-2: #151c29;
+  --line: rgba(148, 163, 184, 0.10);
+  --line-strong: rgba(148, 163, 184, 0.17);
+  --foreground: #e9eef7;
+  --muted: #94a0b3;
   --accent: #22d3ee;
   --accent-2: #38bdf8;
   --teal: #2dd4bf;
   --berry: #fb7185;
   --amber: #fbbf24;
   --cobalt: #60a5fa;
+  --ring: rgba(34, 211, 238, 0.65);
+  --glow: rgba(34, 211, 238, 0.22);
 }
 
 * {
@@ -25,18 +34,22 @@
 html {
   min-width: 320px;
   color-scheme: dark;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.25) transparent;
 }
 
 body {
   margin: 0;
+  /* 딥·저채도 앰비언트 — 콘텐츠 카드가 떠 보이게 배경은 가라앉힌다 */
   background:
-    radial-gradient(900px 520px at 92% -8%, rgba(34, 211, 238, 0.10), transparent 60%),
-    radial-gradient(820px 480px at -6% 4%, rgba(56, 130, 246, 0.10), transparent 55%),
+    radial-gradient(1000px 560px at 90% -10%, rgba(34, 211, 238, 0.07), transparent 60%),
+    radial-gradient(880px 520px at -8% 0%, rgba(37, 99, 235, 0.08), transparent 55%),
     var(--bg);
   background-attachment: fixed;
   color: var(--foreground);
-  font-family: "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", Arial, sans-serif;
+  font-family: "Pretendard Variable", Pretendard, "Apple SD Gothic Neo", "Malgun Gothic", Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 button,
@@ -46,14 +59,46 @@ textarea {
   font: inherit;
 }
 
-/* Top bar */
+/* 마감 — 키보드 포커스 링(마우스 클릭엔 미표시) */
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* 마감 — 스크롤바(트랙과 띄운 필 형태) */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: 999px;
+  background-color: rgba(148, 163, 184, 0.20);
+}
+::-webkit-scrollbar-thumb:hover { background-color: rgba(148, 163, 184, 0.32); }
+
+/* Top bar — 글래스 + 그라디언트 헤어라인 */
 .topbar {
   position: sticky;
   top: 0;
   z-index: 30;
-  background: rgba(8, 11, 17, 0.82);
-  border-bottom: 1px solid var(--line);
-  backdrop-filter: blur(10px);
+  background: rgba(7, 10, 16, 0.72);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  backdrop-filter: blur(16px) saturate(150%);
+}
+.topbar::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(34, 211, 238, 0.35) 30%, rgba(96, 165, 250, 0.25) 62%, transparent);
 }
 
 .topbar-inner {
@@ -78,17 +123,20 @@ textarea {
   justify-content: center;
   height: 36px;
   width: 36px;
-  border-radius: 10px;
+  border-radius: 9px;
   color: #04141a;
   background: linear-gradient(135deg, #22d3ee, #2563eb);
-  box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.35), 0 6px 18px rgba(34, 211, 238, 0.22);
+  box-shadow:
+    0 0 0 1px rgba(34, 211, 238, 0.30),
+    inset 0 1px 0 rgba(255, 255, 255, 0.25),
+    0 4px 12px -4px rgba(34, 211, 238, 0.35);
 }
 
 .brand-text {
   display: flex;
   flex-direction: column;
   line-height: 1.1;
-  font-weight: 800;
+  font-weight: 700;
   font-size: 0.95rem;
   color: #f2f5fb;
 }
@@ -96,9 +144,9 @@ textarea {
 .brand-text small {
   font-size: 0.68rem;
   font-weight: 600;
-  letter-spacing: 0.16em;
+  letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: rgba(140, 151, 168, 0.85);
+  color: rgba(148, 160, 179, 0.85);
 }
 
 .content-shell {
@@ -111,61 +159,69 @@ textarea {
   color: var(--muted);
 }
 
-/* Card surface */
+/* ── Card surface — 그라디언트 헤어라인 보더 + 레이어드 섀도 ──
+   ⚠️ padding-box/border-box 2중 배경 기법: 이 요소에 background-color
+   유틸이 겹치면 헤어라인이 사라지므로 .surface/.hero 전용으로만 사용. */
 .surface {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.02) inset, 0 12px 30px rgba(0, 0, 0, 0.35);
-  transition: border-color 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
+  border: 1px solid transparent;
+  border-radius: 16px;
+  background:
+    linear-gradient(180deg, var(--panel-hi), var(--panel-lo)) padding-box,
+    linear-gradient(165deg,
+      rgba(255, 255, 255, 0.14),
+      rgba(255, 255, 255, 0.04) 34%,
+      rgba(34, 211, 238, 0.12) 100%) border-box;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 1px 1px rgba(0, 0, 0, 0.3),
+    0 12px 32px -16px rgba(0, 0, 0, 0.55);
+  transition: box-shadow 0.16s ease, transform 0.16s ease;
 }
 
 .surface-hover:hover {
-  border-color: var(--line-strong);
   transform: translateY(-1px);
-  box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.12), 0 18px 40px rgba(0, 0, 0, 0.45);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 1px 1px rgba(0, 0, 0, 0.3),
+    0 18px 44px -18px rgba(0, 0, 0, 0.6),
+    0 0 28px -12px var(--glow);
 }
 
-/* ===================== Aurora Glass Hero (executive) =====================
-   임원용 상판 — 흐르는 오로라 컬러필드 + 프로스트 글래스 kicker(라이브 도트)
-   + 화이트→시안 그라디언트 대형 제목. 팔레트(시안/코발트/틸) 유지. */
+/* ═══ Hero — 정적 앰비언트 글로우 + 그라디언트 헤어라인 (오로라 은퇴) ═══ */
 .hero {
   position: relative;
   overflow: hidden;
-  isolation: isolate; /* 자체 스태킹 컨텍스트 → 오로라 레이어를 배경 위/본문 아래 안전 배치 */
+  isolation: isolate;
   border-radius: 20px;
-  padding: clamp(26px, 3.4vw, 44px) clamp(22px, 3.4vw, 46px) clamp(24px, 3vw, 40px);
+  padding: clamp(30px, 3.6vw, 52px) clamp(24px, 3.6vw, 48px) clamp(26px, 3.2vw, 44px);
   color: #eaf6fb;
-  border: 1px solid rgba(56, 189, 248, 0.18);
+  border: 1px solid transparent;
   background:
-    radial-gradient(120% 130% at 100% 0%, rgba(37, 99, 235, 0.12), transparent 55%),
-    linear-gradient(118deg, #0b1422 0%, #0b1a2b 48%, #0a1018 100%);
+    linear-gradient(180deg, #0c1220, #0a0f18) padding-box,
+    linear-gradient(120deg,
+      rgba(34, 211, 238, 0.38),
+      rgba(255, 255, 255, 0.06) 32%,
+      rgba(96, 165, 250, 0.16) 68%,
+      rgba(37, 99, 235, 0.30)) border-box;
   box-shadow:
     0 26px 64px -22px rgba(0, 0, 0, 0.68),
-    inset 0 1px 0 rgba(255, 255, 255, 0.07),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
-/* Aurora — 천천히 표류하는 프로스트 컬러필드(시안 / 코발트 / 스카이 / 틸) */
+/* 정적 듀얼 글로우 — 유일한 모션은 18s 명멸(breathe) */
 .hero::before {
   content: "";
   position: absolute;
-  inset: -45%; /* 여유 오버플로우로 이동 시 가장자리 노출 방지 */
+  inset: 0;
   z-index: -2;
   pointer-events: none;
   background:
-    radial-gradient(40% 48% at 88% 6%, rgba(34, 211, 238, 0.46), transparent 60%),
-    radial-gradient(46% 54% at 74% 98%, rgba(37, 99, 235, 0.44), transparent 60%),
-    radial-gradient(42% 50% at 102% 56%, rgba(56, 189, 248, 0.34), transparent 58%),
-    radial-gradient(48% 56% at 8% 104%, rgba(45, 212, 191, 0.26), transparent 62%),
-    radial-gradient(34% 42% at 24% 10%, rgba(34, 211, 238, 0.16), transparent 64%);
-  filter: blur(28px) saturate(122%);
-  opacity: 0.92;
-  will-change: transform; /* transform-only 애니메이션 → GPU 친화적 */
-  animation: heroAurora 22s ease-in-out infinite alternate;
+    radial-gradient(620px 320px at 88% -12%, rgba(34, 211, 238, 0.15), transparent 62%),
+    radial-gradient(520px 300px at -6% 110%, rgba(37, 99, 235, 0.11), transparent 60%);
+  animation: heroBreathe 18s ease-in-out infinite alternate;
 }
 
-/* Glass sheen(상단 유리 하이라이트) + 미세 SOC 그레인 */
+/* 상단 유리 하이라이트 + 미세 그레인(절제) */
 .hero::after {
   content: "";
   position: absolute;
@@ -173,13 +229,13 @@ textarea {
   z-index: -1;
   pointer-events: none;
   background-image:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0) 24%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0) 24%),
     radial-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px);
   background-size: auto, 20px 20px;
-  opacity: 0.6;
+  opacity: 0.35;
 }
 
-/* Kicker — 프로스트 글래스 pill + 라이브 모니터링 도트(::before) */
+/* Kicker — 투명한 헤어라인 pill + 라이브 도트 */
 .hero-kicker {
   position: relative;
   display: inline-flex;
@@ -188,15 +244,13 @@ textarea {
   padding: 6px 14px 6px 12px;
   border-radius: 999px;
   font-size: 0.74rem;
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: #aef2ff;
-  background: linear-gradient(180deg, rgba(34, 211, 238, 0.16), rgba(34, 211, 238, 0.07));
-  border: 1px solid rgba(34, 211, 238, 0.34);
-  box-shadow: 0 2px 16px rgba(34, 211, 238, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  -webkit-backdrop-filter: blur(7px);
-  backdrop-filter: blur(7px);
+  background: rgba(34, 211, 238, 0.06);
+  border: 1px solid rgba(34, 211, 238, 0.22);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 .hero-kicker::before {
   content: "";
@@ -204,21 +258,21 @@ textarea {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #2dd4bf; /* 팔레트 teal — 라이브 감시 신호 */
+  background: #2dd4bf;
   box-shadow: 0 0 10px rgba(45, 212, 191, 0.9);
-  animation: heroLive 2.6s ease-out infinite; /* 부드러운 레이더 핑(깜빡임 아님) */
+  animation: heroLive 3.6s ease-out infinite;
 }
 
-/* Title — 크고 대담. near-white→시안 그라디언트 + 느린 sheen + 시안 글로우 */
+/* Title — 가변 웨이트 750, 그라디언트 클립 + 느린 sheen */
 .hero-title {
   margin: 16px 0 0;
-  font-size: clamp(1.9rem, 1.15rem + 3.3vw, 3.6rem); /* 데스크톱 최대 3.6rem */
+  font-size: clamp(1.9rem, 1.15rem + 3.3vw, 3.6rem);
   line-height: 1.14;
-  font-weight: 800;
-  letter-spacing: -0.01em; /* 한글 제목 — 과하게 조이지 않음 */
-  color: #f4fbff; /* fallback: background-clip 미지원 시 이 색으로 가시 */
+  font-weight: 750;
+  letter-spacing: -0.015em;
+  color: #f4fbff; /* fallback: background-clip 미지원 시 */
   text-wrap: balance;
-  filter: drop-shadow(0 2px 18px rgba(34, 211, 238, 0.22)); /* clip-text에도 안전한 글로우 */
+  filter: drop-shadow(0 2px 18px rgba(34, 211, 238, 0.14));
 }
 @supports ((-webkit-background-clip: text) or (background-clip: text)) {
   .hero-title {
@@ -226,8 +280,8 @@ textarea {
     background-size: 220% 100%;
     -webkit-background-clip: text;
     background-clip: text;
-    -webkit-text-fill-color: transparent; /* 명도 높은 화이트~라이트시안 → 다크 위 AA 가독 */
-    animation: heroSheen 9s ease-in-out infinite;
+    -webkit-text-fill-color: transparent;
+    animation: heroSheen 14s ease-in-out infinite;
   }
 }
 
@@ -239,10 +293,9 @@ textarea {
   color: rgba(222, 234, 245, 0.82);
 }
 
-@keyframes heroAurora {
-  0%   { transform: translate3d(-2%, -1%, 0) rotate(0deg)  scale(1.06); }
-  50%  { transform: translate3d(3%,  2%,  0) rotate(3deg)  scale(1.12); }
-  100% { transform: translate3d(-1%, 3%,  0) rotate(-2deg) scale(1.07); }
+@keyframes heroBreathe {
+  from { opacity: 0.7; }
+  to   { opacity: 1; }
 }
 @keyframes heroSheen {
   0%, 100% { background-position: 0% 50%; }
@@ -256,12 +309,12 @@ textarea {
 
 /* Reduced motion — 모든 루프 애니메이션 정지 */
 @media (prefers-reduced-motion: reduce) {
-  .hero::before { animation: none; }
+  .hero::before { animation: none; opacity: 1; }
   .hero-title { animation: none; background-position: 0% 50%; }
   .hero-kicker::before { animation: none; }
 }
 
-/* Stat tile — KPI card with accent rail */
+/* ── Stat tile — 페이드 레일 + 코너 틴트 ── */
 .stat-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -274,66 +327,106 @@ textarea {
   flex-direction: column;
   gap: 12px;
   padding: 18px 18px 16px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 14px;
+  border: 1px solid transparent;
+  border-radius: 16px;
   overflow: hidden;
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
-  transition: border-color 0.18s ease, transform 0.18s ease;
+  background:
+    linear-gradient(180deg, var(--panel-hi), var(--panel-lo)) padding-box,
+    linear-gradient(165deg,
+      rgba(255, 255, 255, 0.13),
+      rgba(255, 255, 255, 0.04) 40%,
+      rgba(148, 163, 184, 0.10) 100%) border-box;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 1px 1px rgba(0, 0, 0, 0.3),
+    0 12px 32px -16px rgba(0, 0, 0, 0.55);
+  transition: box-shadow 0.16s ease, transform 0.16s ease;
 }
 
 .stat-tile:hover {
   transform: translateY(-1px);
-  border-color: var(--line-strong);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 1px 1px rgba(0, 0, 0, 0.3),
+    0 16px 40px -16px rgba(0, 0, 0, 0.6);
 }
 
+/* 좌측 페이드 레일(2px) */
 .stat-tile::before {
   content: "";
   position: absolute;
   left: 0;
-  top: 0;
-  bottom: 0;
-  width: 3px;
-  background: var(--accent, var(--accent));
+  top: 12px;
+  height: 44%;
+  width: 2px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--accent), transparent);
+}
+
+/* 좌상단 코너 틴트 — 액센트가 은은하게 번지는 빛 */
+.stat-tile::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(240px 130px at 0% 0%, rgba(255, 255, 255, 0.04), transparent 72%);
+  background: radial-gradient(240px 130px at 0% 0%, color-mix(in srgb, var(--accent) 9%, transparent), transparent 72%);
 }
 
 .stat-value {
-  font-size: 2rem;
-  font-weight: 800;
+  font-size: 2.1rem;
+  font-weight: 750;
   line-height: 1;
-  letter-spacing: -0.02em;
-  color: #f3f6fc;
+  letter-spacing: -0.025em;
+  color: #f3f6fc; /* fallback */
   font-variant-numeric: tabular-nums;
 }
+@supports ((-webkit-background-clip: text) or (background-clip: text)) {
+  .stat-value {
+    background-image: linear-gradient(180deg, #ffffff, #c8d6e8);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+}
 
+/* ── Chip — 틴트 + 헤어라인 ── */
 .chip {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 3px 9px;
+  padding: 3px 10px;
   border-radius: 999px;
   font-size: 0.72rem;
-  font-weight: 700;
+  font-weight: 600;
+  letter-spacing: 0.02em;
   white-space: nowrap;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.10);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 24%, transparent);
 }
 
-.chip-up { background: rgba(45, 212, 191, 0.14); color: #5eead4; }
-.chip-down { background: rgba(251, 113, 133, 0.14); color: #fda4af; }
-.chip-neutral { background: rgba(255, 255, 255, 0.06); color: #aab4c4; }
+.chip-up { background: rgba(45, 212, 191, 0.12); color: #5eead4; }
+.chip-down { background: rgba(251, 113, 133, 0.12); color: #fda4af; }
+.chip-neutral { background: rgba(255, 255, 255, 0.05); color: #aab4c4; }
 
-/* Bar-list rows */
+/* ── Bar-list — 슬림 pill 트랙 + 그라디언트 필 ── */
 .barlist-track {
-  height: 16px;
+  height: 10px;
   width: 100%;
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.06);
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
   overflow: hidden;
 }
 
 .barlist-fill {
   height: 100%;
-  border-radius: 6px;
-  background: var(--accent);
+  border-radius: 999px;
+  background: var(--bar-color, var(--accent));
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--bar-color, var(--accent)) 78%, #0b1220),
+    var(--bar-color, var(--accent)));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
 }
 
 ::placeholder { color: #5f6b7a; }
@@ -342,35 +435,37 @@ textarea {
 
 /* ─────────────────────────────────────────────────────────────
    Dark remap — 컴포넌트에 박힌 라이트 Tailwind 유틸을 다크로 치환.
-   (.tsx 를 건드리지 않고 전체 다크 전환)
+   (.tsx 를 건드리지 않고 전체 다크 전환. 보더는 슬레이트 틴트로 통일)
    ───────────────────────────────────────────────────────────── */
 /* surfaces */
-.bg-white { background-color: #11161f !important; }
-.bg-white\/95 { background-color: rgba(15, 20, 28, 0.92) !important; }
+.bg-white { background-color: #10151f !important; }
+.bg-white\/95 { background-color: rgba(14, 19, 28, 0.92) !important; }
 .bg-white\/70 { background-color: rgba(255, 255, 255, 0.05) !important; }
-.bg-slate-50 { background-color: #161d28 !important; }
-.bg-slate-50\/70 { background-color: rgba(22, 29, 40, 0.7) !important; }
-.bg-slate-50\/50 { background-color: rgba(22, 29, 40, 0.5) !important; }
-.bg-slate-50\/40 { background-color: rgba(22, 29, 40, 0.4) !important; }
-.bg-slate-100 { background-color: #1b2330 !important; }
-.bg-slate-200 { background-color: #26303d !important; }
+.bg-white\/60 { background-color: rgba(255, 255, 255, 0.045) !important; }
+.bg-white\/50 { background-color: rgba(255, 255, 255, 0.04) !important; }
+.bg-slate-50 { background-color: #151c29 !important; }
+.bg-slate-50\/70 { background-color: rgba(21, 28, 41, 0.7) !important; }
+.bg-slate-50\/50 { background-color: rgba(21, 28, 41, 0.5) !important; }
+.bg-slate-50\/40 { background-color: rgba(21, 28, 41, 0.4) !important; }
+.bg-slate-100 { background-color: #1a2231 !important; }
+.bg-slate-200 { background-color: #25303f !important; }
 .bg-slate-500 { background-color: #64748b !important; }
-.hover\:bg-slate-50:hover { background-color: rgba(255, 255, 255, 0.05) !important; }
-.hover\:bg-slate-100:hover { background-color: rgba(255, 255, 255, 0.08) !important; }
+.hover\:bg-slate-50:hover { background-color: rgba(148, 163, 184, 0.07) !important; }
+.hover\:bg-slate-100:hover { background-color: rgba(148, 163, 184, 0.10) !important; }
 
-/* text */
-.text-ink { color: #e7ecf5 !important; }
+/* text (AA 보정 포함) */
+.text-ink { color: #e9eef7 !important; }
 .text-slate-800 { color: #e2e8f2 !important; }
 .text-slate-700 { color: #c9d2de !important; }
 .text-slate-600 { color: #a6b0bf !important; }
-.text-slate-500 { color: #8a95a4 !important; }
-.text-slate-400 { color: #6c7684 !important; }
+.text-slate-500 { color: #8f9aad !important; }
+.text-slate-400 { color: #78849a !important; }
 
-/* borders */
-.border-slate-300 { border-color: rgba(255, 255, 255, 0.14) !important; }
-.border-slate-200 { border-color: rgba(255, 255, 255, 0.09) !important; }
-.border-slate-100 { border-color: rgba(255, 255, 255, 0.06) !important; }
-.border-slate-50 { border-color: rgba(255, 255, 255, 0.045) !important; }
+/* borders — 슬레이트 틴트 */
+.border-slate-300 { border-color: rgba(148, 163, 184, 0.18) !important; }
+.border-slate-200 { border-color: rgba(148, 163, 184, 0.12) !important; }
+.border-slate-100 { border-color: rgba(148, 163, 184, 0.08) !important; }
+.border-slate-50 { border-color: rgba(148, 163, 184, 0.06) !important; }
 .focus\:border-rose-400:focus { border-color: rgba(34, 211, 238, 0.6) !important; }
 .focus\:border-sky-400:focus { border-color: rgba(34, 211, 238, 0.6) !important; }
 
@@ -389,12 +484,12 @@ textarea {
 .border-teal-300 { border-color: rgba(45, 212, 191, 0.36) !important; }
 .border-teal-200 { border-color: rgba(45, 212, 191, 0.24) !important; }
 
-/* sky → cyan accent (info / selected / dismissed) */
+/* sky → 정보/선택 (시안 액센트와 구분되는 라이트 블루) */
 .bg-sky-50 { background-color: rgba(34, 211, 238, 0.10) !important; }
 .bg-sky-100 { background-color: rgba(34, 211, 238, 0.16) !important; }
 .bg-sky-600 { background-color: #0891b2 !important; }
 .bg-sky-700 { background-color: #0e7490 !important; }
-.text-sky-800, .text-sky-700, .text-sky-600 { color: #67e8f9 !important; }
+.text-sky-800, .text-sky-700, .text-sky-600 { color: #7dd3fc !important; }
 .border-sky-400 { border-color: rgba(34, 211, 238, 0.55) !important; }
 .border-sky-300 { border-color: rgba(34, 211, 238, 0.40) !important; }
 .border-sky-200 { border-color: rgba(34, 211, 238, 0.28) !important; }
@@ -419,10 +514,13 @@ textarea {
 
 @media (max-width: 640px) {
   .stat-grid { grid-template-columns: 1fr; }
-  .hero { padding: 22px 18px 20px; border-radius: 16px; }
+  .hero { padding: 24px 18px 22px; border-radius: 16px; }
   .hero-title { font-size: clamp(1.5rem, 0.9rem + 3.4vw, 2.1rem); letter-spacing: -0.005em; } /* 320px≈25px */
   .hero-desc { font-size: 0.9rem; line-height: 1.66; }
-  .hero::before { filter: blur(22px) saturate(118%); } /* 소형 화면 블러 경량화 */
+  .topbar {
+    -webkit-backdrop-filter: blur(10px);
+    backdrop-filter: blur(10px); /* 저사양 스크롤 프레임 보호 */
+  }
   .content-shell { padding: 16px; }
   .topbar-inner { padding: 12px 16px; }
 }

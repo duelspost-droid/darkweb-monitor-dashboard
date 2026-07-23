@@ -14,6 +14,22 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="ko">
+      {/* 웹폰트 — Pretendard Variable(본문·제목, dynamic subset) + JetBrains Mono(수치·모노).
+          CDN 차단 시(사내망 등) 시스템 폰트로 조용히 폴백. */}
+      <head>
+        <link rel="preconnect" href="https://cdn.jsdelivr.net" crossOrigin="anonymous" />
+        <link
+          rel="stylesheet"
+          href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css"
+          crossOrigin="anonymous"
+        />
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        <link
+          href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap"
+          rel="stylesheet"
+        />
+      </head>
       <body>
         <header className="topbar">
           <div className="topbar-inner">

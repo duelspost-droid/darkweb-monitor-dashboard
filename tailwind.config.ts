@@ -4,11 +4,15 @@ const config: Config = {
   content: ["./app/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}", "./lib/**/*.{ts,tsx}"],
   theme: {
     extend: {
+      fontFamily: {
+        sans: ['"Pretendard Variable"', "Pretendard", '"Apple SD Gothic Neo"', '"Malgun Gothic"', "Arial", "sans-serif"],
+        mono: ['"JetBrains Mono"', "ui-monospace", "SFMono-Regular", "Consolas", "monospace"]
+      },
       colors: {
-        ink: "#e7ecf5",
-        panel: "#11161f",
-        line: "rgba(255,255,255,0.09)",
-        muted: "#8c97a8",
+        ink: "#e9eef7",
+        panel: "#10151f",
+        line: "rgba(148,163,184,0.10)",
+        muted: "#94a0b3",
         teal: {
           DEFAULT: "#0f766e",
           50: "#f0fdfa",
@@ -23,7 +27,7 @@ const config: Config = {
           900: "#134e4a",
           950: "#042f2e"
         },
-        berry: "#be123c",
+        berry: "#fb7185",
         amber: {
           DEFAULT: "#b45309",
           50: "#fffbeb",
@@ -38,7 +42,7 @@ const config: Config = {
           900: "#78350f",
           950: "#451a03"
         },
-        cobalt: "#3157a4"
+        cobalt: "#60a5fa"
       },
       boxShadow: {
         soft: "0 1px 2px rgba(16, 24, 40, 0.06), 0 8px 24px rgba(16, 24, 40, 0.05)"

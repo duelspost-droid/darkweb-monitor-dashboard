@@ -1,3 +1,5 @@
+import type { CSSProperties } from "react";
+
 // 수평 바 리스트 — 분포/랭킹을 서버 렌더로 표현(라벨 + 값 + 비례 막대).
 export type BarItem = {
   label: string;
@@ -7,7 +9,8 @@ export type BarItem = {
   sublabel?: string;
 };
 
-const PALETTE = ["#0f766e", "#3157a4", "#b45309", "#be123c", "#0891b2", "#7c3aed", "#64748b", "#9333ea"];
+// 다크 배경 위에서 선명한 밝은 톤(시맨틱: teal=정상, cobalt=정보, amber=경고, rose=위험)
+const PALETTE = ["#2dd4bf", "#60a5fa", "#fbbf24", "#fb7185", "#22d3ee", "#a78bfa", "#94a3b8", "#c084fc"];
 
 export function BarList({
   items,
@@ -33,7 +36,8 @@ export function BarList({
               </span>
             </div>
             <div className="barlist-track">
-              <div className="barlist-fill" style={{ width: `${pct}%`, background: color }} />
+              {/* 색은 --bar-color 변수로 전달 — 그라디언트/하이라이트는 CSS(.barlist-fill)가 제어 */}
+              <div className="barlist-fill" style={{ width: `${pct}%`, "--bar-color": color } as CSSProperties} />
             </div>
           </div>
         );
