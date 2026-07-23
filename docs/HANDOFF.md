@@ -673,3 +673,18 @@ cd /Users/hk/darkweb-monitor-dashboard && npm run supabase:pull
 ### 남은 확인
 - [x] **로그인 화면 미리보기(LoginNewsPreview) 실검증 완료** — 세션 없는 인앱 브라우저로 dark.jbax.co.kr 로그인 화면 로드 → "오늘의 보안 뉴스" 미리보기 **5건(금융 배지) 노출·news.google.com 링크 5개** 확인. **anon 읽기 RLS 경로가 로그인 전에도 정상 작동**함을 실증(로그아웃 없이).
 - [x] **모바일(375px) 검증 완료** — 로그인+미리보기 화면 innerWidth 375, **가로 오버플로 0**, 금융 헤드라인 5건 렌더 정상.
+
+### 뉴스 수동 재수집(2026-07-23 22:32, 사용자 "지금 반영해")
+- 크론 트리거(jobid=1) 재실행 → `security_news` **84→92건(금융 31→34)**, 최신 기사 8시간 전→**2시간 전**, fetched_at 22:32. 라이브 배지 "2시간 전 갱신"·필터칩(전체80·금융24·개인정보14·랜섬웨어13·다크웹11·취약점12·사이버공격12) 갱신 확인. 코드 변경 없음(데이터 새로고침). **뉴스 즉시 갱신법 = SQL Editor에서 `DO $$ DECLARE c text; BEGIN SELECT command INTO c FROM cron.job WHERE jobid=1; EXECUTE c; END $$;` Run**(agent Run은 auto분류기 차단 → 사용자 Run 또는 크롬 btn.click 경로).
+
+---
+
+## 이 세션(2026-07-23) 전체 요약 — PC 간 인계용
+
+한 세션에서 4개 작업 완료, 전부 main 반영·라이브·검증:
+1. **21절 파일명 PII 마스킹**(PR#1=8ce001e) — breach_title/reference_url 사각지대 수정(Edge+Node+프런트, 숫자스캔), 유닛10/10.
+2. **21b절 크론 복구** — 자정 스캔 12일 멈춤(WORKER_RESOURCE_LIMIT/pg_net 타임아웃) 진단 → 다른PC 병렬화커밋 재배포로 해결, 수동트리거 HTTP200 확증.
+3. **22절 디자인 리프레시**(c881bdd) — 'Refined Glass Minimal'(멀티에이전트 심사 8.75), 웹폰트 실로드+그라디언트 헤어라인+틴티드 팔레트.
+4. **23절 보안 뉴스**(PR#2=3be4c3a) — 대시보드 '오늘의 보안 뉴스'(Google News RSS·금융우선·매일 자정 자동갱신·로그인전 미리보기), 멀티에이전트 적대검증.
+
+**⚠️ 운영 핵심**: 크론 `daily-breach-scan`(jobid=1, `0 15 * * *` UTC=자정 KST)이 유출 스캔 **+ 보안 뉴스**를 함께 수집. Edge 재배포는 Chrome monaco raw 주입(`getModels()[0].setValue(fetch main raw)`→Deploy), 마이그·스캔트리거는 SQL Editor Run(agent는 분류기 차단, 사용자/btn.click). **다음 아침(07-24) scan_runs 자동행 확인 권장**(크론 자동 정상 확증).
