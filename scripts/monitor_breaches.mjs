@@ -558,6 +558,35 @@ function rrnValid(d13) {
   for (let i = 0; i < 12; i++) sum += (d13.charCodeAt(i) - 48) * w[i];
   return ((11 - (sum % 11)) % 10) === (d13.charCodeAt(12) - 48);
 }
+// 파일 경로/이름 자체에 박힌 고신뢰 식별·금융 값(주민/외국인등록번호·카드·휴대전화)을 마스킹(Edge·프런트 미러).
+// breach_title·reference_url 은 값 미저장 원칙의 사각지대였다 — 파일명에 값이 있으면 제목/URL 로 그대로 저장됨.
+// 값이 밑줄·문자에 바로 붙는 경우가 많아 \b 로는 못 잡으므로 최대 숫자런 추출 후 길이·체크섬으로 판정.
+function redactPiiInPath(s) {
+  if (!s) return { text: s, redacted: false };
+  const isD = (c) => c >= 48 && c <= 57;
+  const classify = (d) => {
+    if (d.length === 13 && rrnValid(d)) { const mm = +d.slice(2, 4), dd = +d.slice(4, 6), g = +d.charAt(6); if (mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31 && g >= 1 && g <= 8) return "[식별번호]"; }
+    if (d.length === 16 && luhnValid(d)) return "[카드번호]";
+    if ((d.length === 10 || d.length === 11) && d.charCodeAt(0) === 48 && d.charCodeAt(1) === 49 && "016789".indexOf(d.charAt(2)) >= 0) return "[전화번호]";
+    return null;
+  };
+  let out = "", redacted = false, i = 0;
+  const n = s.length;
+  while (i < n) {
+    if (!isD(s.charCodeAt(i))) { out += s.charAt(i); i++; continue; }
+    let j = i, digits = "";
+    while (j < n) {
+      const c = s.charCodeAt(j);
+      if (isD(c)) { digits += s.charAt(j); j++; continue; }
+      if ((c === 45 || c === 32) && j + 1 < n && isD(s.charCodeAt(j + 1))) { j++; continue; }
+      break;
+    }
+    const label = classify(digits);
+    if (label) { out += label; redacted = true; } else { out += s.slice(i, j); }
+    i = j;
+  }
+  return { text: out, redacted };
+}
 function classifyFinancialPii(text) {
   if (!text || typeof text !== "string") return { categories: [], count: 0, maxSeverity: null, locations: [] };
   const t = text.length > 200000 ? text.slice(0, 200000) : text;
@@ -658,14 +687,18 @@ async function collectGithub(domains, nowIso) {
         const key = `${repo}/${path}`;
         if (!repo || seen.has(key)) continue;
         seen.add(key);
+        // 파일명/경로 자체에 박힌 식별·금융 값 마스킹(값 미저장 불변식). 값 포함 시 파일 URL 대신 레포 루트로.
+        const red = redactPiiInPath(`${repo} · ${path}`);
+        const breachTitle = red.text.slice(0, 120);
+        const safeUrl = red.redacted ? `https://github.com/${repo}` : url;
         findings.push(makeRawFinding({
           domain, alias: "*",
           breachName: "GitHub 공개 노출",
-          breachTitle: `${repo} · ${path}`.slice(0, 120),
+          breachTitle,
           dataClassesKo: gq.dc,
           severity: "high",
           source: "공개 노출 (GitHub)",
-          referenceUrl: url,
+          referenceUrl: safeUrl,
         }, nowIso, key));
         // 파일 내용 스캔 → 금융 고객 PII 카테고리 탐지(값 미저장). 상한 내에서만.
         if (scanned < PII_SCAN_LIMIT && it.url) {
@@ -678,11 +711,11 @@ async function collectGithub(domains, nowIso) {
                 findings.push(makeRawFinding({
                   domain, alias: "*",
                   breachName: "고객 개인정보 노출 (GitHub)",
-                  breachTitle: `${repo} · ${path}`.slice(0, 120),
+                  breachTitle, // 파일명 마스킹 재사용(위에서 계산)
                   dataClassesKo: pii.categories, // 카테고리만 — 실제 값 미포함
                   severity: pii.maxSeverity || "high",
                   source: "고객정보 노출 (GitHub)",
-                  referenceUrl: url,
+                  referenceUrl: safeUrl, // 파일명에 값 있으면 레포 루트(딥링크 대신)
                   piiLocations: pii.locations, // 카테고리별 라인 위치(값 미포함)
                 }, nowIso, `pii|${key}`));
               }

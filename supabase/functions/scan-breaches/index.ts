@@ -475,6 +475,37 @@ function classifyFinancialPii(text: string): { categories: string[]; count: numb
   return { categories, count, maxSeverity, locations };
 }
 
+// 파일 경로/이름 자체에 박힌 고신뢰 식별·금융 값(주민/외국인등록번호·카드·휴대전화)을 마스킹한다.
+// breach_title·reference_url 은 값 미저장 원칙의 사각지대였다 — 파일명에 값이 있으면 제목/URL 로 그대로 저장됨.
+// 파일명은 값이 밑줄·문자에 바로 붙는 경우가 많아(예: customers_9001011234567.csv) 정규식 \b 로는
+// 못 잡는다 → 최대 숫자런을 추출(내부 단일 '-'/공백 허용)해 길이·체크섬으로 판정한다. 프런트 redactPii 와 동일 알고리즘.
+function redactPiiInPath(s: string): { text: string; redacted: boolean } {
+  if (!s) return { text: s, redacted: false };
+  const isD = (c: number) => c >= 48 && c <= 57;
+  const classify = (d: string): string | null => {
+    if (d.length === 13 && rrnValid(d) && ((): boolean => { const mm = +d.slice(2, 4), dd = +d.slice(4, 6), g = +d.charAt(6); return mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31 && g >= 1 && g <= 8; })()) return "[식별번호]";
+    if (d.length === 16 && luhnValid(d)) return "[카드번호]";
+    if ((d.length === 10 || d.length === 11) && d.charCodeAt(0) === 48 && d.charCodeAt(1) === 49 && "016789".indexOf(d.charAt(2)) >= 0) return "[전화번호]";
+    return null;
+  };
+  let out = "", redacted = false, i = 0;
+  const n = s.length;
+  while (i < n) {
+    if (!isD(s.charCodeAt(i))) { out += s.charAt(i); i++; continue; }
+    let j = i, digits = "";
+    while (j < n) {
+      const c = s.charCodeAt(j);
+      if (isD(c)) { digits += s.charAt(j); j++; continue; }
+      if ((c === 45 || c === 32) && j + 1 < n && isD(s.charCodeAt(j + 1))) { j++; continue; }
+      break;
+    }
+    const label = classify(digits);
+    if (label) { out += label; redacted = true; } else { out += s.slice(i, j); }
+    i = j;
+  }
+  return { text: out, redacted };
+}
+
 // ── GitHub 공개 노출 검색 (키-게이트, 무료 합법) → breach_findings ───────────
 async function collectGithub(domains: string[], nowIso: string): Promise<{ findings: RawFinding[]; used: boolean; count: number }> {
   if (!GITHUB_TOKEN) return { findings: [], used: false, count: 0 };
@@ -512,14 +543,18 @@ async function collectGithub(domains: string[], nowIso: string): Promise<{ findi
         const key = `${repo}/${path}`;
         if (!repo || seen.has(key)) continue;
         seen.add(key);
+        // 파일명/경로 자체에 박힌 식별·금융 값 마스킹(값 미저장 불변식). 값 포함 시 파일 URL 대신 레포 루트로.
+        const red = redactPiiInPath(`${repo} · ${path}`);
+        const breachTitle = red.text.slice(0, 120);
+        const safeUrl = red.redacted ? `https://github.com/${repo}` : url;
         findings.push(await mkRawFinding({
           domain, alias: "*",
           breachName: "GitHub 공개 노출",
-          breachTitle: `${repo} · ${path}`.slice(0, 120),
+          breachTitle,
           dataClassesKo: gq.dc,
           severity: "high",
           source: "공개 노출 (GitHub)",
-          referenceUrl: url,
+          referenceUrl: safeUrl,
         }, nowIso, key));
         // 파일 내용 스캔 → 금융 고객 PII 카테고리 탐지(값 미저장). 상한 내에서만.
         if (scanned < PII_SCAN_LIMIT && it.url) {
@@ -532,11 +567,11 @@ async function collectGithub(domains: string[], nowIso: string): Promise<{ findi
                 findings.push(await mkRawFinding({
                   domain, alias: "*",
                   breachName: "고객 개인정보 노출 (GitHub)",
-                  breachTitle: `${repo} · ${path}`.slice(0, 120),
+                  breachTitle, // 파일명 마스킹 재사용(위에서 계산)
                   dataClassesKo: pii.categories, // 카테고리만 — 실제 값 미포함
                   severity: pii.maxSeverity || "high",
                   source: "고객정보 노출 (GitHub)",
-                  referenceUrl: url,
+                  referenceUrl: safeUrl, // 파일명에 값 있으면 레포 루트(딥링크 대신)
                   piiLocations: pii.locations, // 카테고리별 라인 위치(값 미포함)
                 }, nowIso, `pii|${key}`));
               }
@@ -596,7 +631,11 @@ async function collectGitlab(domains: string[], nowIso: string): Promise<{ findi
         }
         const ref = it.ref || "master";
         const url = webPath ? `https://gitlab.com/${webPath}/-/blob/${ref}/${path}` : `https://gitlab.com/search?scope=blobs&search=${q}`;
-        const title = (webPath ? `${webPath} · ${path}` : `project#${pid} · ${path}`).slice(0, 120);
+        const rawTitle = webPath ? `${webPath} · ${path}` : `project#${pid} · ${path}`;
+        // 파일명/경로 자체의 식별·금융 값 마스킹. 값 포함 시 blob URL 대신 프로젝트 루트/검색 링크로.
+        const red = redactPiiInPath(rawTitle);
+        const title = red.text.slice(0, 120);
+        const safeUrl = red.redacted ? (webPath ? `https://gitlab.com/${webPath}` : `https://gitlab.com/search?scope=blobs&search=${q}`) : url;
         findings.push(await mkRawFinding({
           domain, alias: "*",
           breachName: "GitLab 공개 노출",
@@ -604,7 +643,7 @@ async function collectGitlab(domains: string[], nowIso: string): Promise<{ findi
           dataClassesKo: gq.dc,
           severity: "high",
           source: "공개 노출 (GitLab)",
-          referenceUrl: url,
+          referenceUrl: safeUrl,
         }, nowIso, key));
       }
       await sleep(1000); // 코드 검색 레이트리밋 배려
