@@ -671,5 +671,5 @@ cd /Users/hk/darkweb-monitor-dashboard && npm run supabase:pull
 - ✅ **프로덕션 E2E 라이브 검증**: PR#2 머지→Pages배포 success → **마이그 018 적용**(SQL Editor Run, "Success") → **Edge 재배포**(raw 주입 61,781→66,991자, "Successfully updated") → **수동 트리거**(cron jobid=1 동일) → `security_news` **84건(금융 31)** 적재 확인 → **라이브 대시보드 육안**: '오늘의 보안 뉴스' 패널 KPI 아래 렌더, 필터칩(전체80·금융27·개인정보/랜섬웨어/다크웹/취약점/사이버공격 각12), 금융 우선 정렬, 실뉴스(지디넷·데일리시큐·연합 등)·상대시각("11시간 전"), 16 news.google.com 링크. → **내일부터 자정 크론이 자동 갱신.**
 
 ### 남은 확인
-- [ ] 로그인 화면 미리보기(LoginNewsPreview) 실제 노출 — anon RLS·GRANT 로 구성상 검증됨, 로그아웃 육안은 미실시(세션 유지 위해). 
-- [ ] 모바일 실기기에서 뉴스 패널 육안.
+- [x] **로그인 화면 미리보기(LoginNewsPreview) 실검증 완료** — 세션 없는 인앱 브라우저로 dark.jbax.co.kr 로그인 화면 로드 → "오늘의 보안 뉴스" 미리보기 **5건(금융 배지) 노출·news.google.com 링크 5개** 확인. **anon 읽기 RLS 경로가 로그인 전에도 정상 작동**함을 실증(로그아웃 없이).
+- [x] **모바일(375px) 검증 완료** — 로그인+미리보기 화면 innerWidth 375, **가로 오버플로 0**, 금융 헤드라인 5건 렌더 정상.
