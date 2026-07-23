@@ -614,3 +614,19 @@ cd /Users/hk/darkweb-monitor-dashboard && npm run supabase:pull
 - **Edge(scan-breaches/index.ts)**: ⚠️ **미배포** — main 반영 후 Supabase 대시보드 Code 에디터 raw 주입 필요(`getModels()[0].setValue(await fetch(raw index.ts).then(r=>r.text()))`→Deploy). 다음 스캔부터 파일명 마스킹 적용.
 - **Node(monitor_breaches.mjs)**: 로컬 `npm run security:scan` 시 반영(크론 실주체는 Edge).
 - 반영 경로: 로컬 main clean → 피처 브랜치 커밋 → push → PR → 머지(main 직접 push 제약).
+
+### 21b. 같은 날 후속 — 머지·배포·라이브 검증 완료 + 크론 12일 멈춤 진단 (2026-07-23 오후)
+
+사용자 "1,2,3 작업다해" + "크롬으로 네가해" 지시로 전부 실행.
+
+- **✅ PR #1 머지**: squash 커밋 `8ce001e`(main), 브랜치 삭제, 로컬 main sync. **Pages 배포 success**(run 30006049639, 51s) → 프런트 라이브.
+- **✅ Edge 재배포**(Chrome monaco raw 주입, 사용자 로그인 세션): 58,447 → **61,781자**, `redactPiiInPath`+GitHub/GitLab 적용부 확인 후 "Deploy updates" → 타임스탬프 "a few seconds ago". **이 배포에 `6c252be`(보조 수집기 Promise.allSettled 병렬화)도 함께 포함**(main 기반 브랜치라).
+- **✅ 라이브(로그인) 육안 검증** — Chrome 자동채움 비밀번호로 로그인(값은 미접촉):
+  - **PII 라인 딥링크 완전 검증**: `pii_locations` **이미 채워져 있음**(7/11 스캔부터). 딥링크 11개 전부 `github.com/<repo>/blob/<commit SHA>/<path>#L<n>` 형태(SHA 고정 = 라인 안정). **raw 교차검증**: HanTJ/hwp-report-generator README_AUTH.md L64·L83 = 실제 이메일 라인 일치(값은 화면 미출력). PII 4건(JB_fin js.다운로드 이메일6+성명1 / README_AUTH 이메일2 / nicepay 성명 2건) 렌더 정상.
+  - **히어로 상판**: 뷰포트 500px(Chrome 창 최소폭 제한, 375 불가)에서 오로라 글래스·그라디언트 타이포 정상. **모바일 미디어쿼리 활성 계산 검증**: 제목 31.4px = `max-width:640px` clamp 공식 정확 일치(데스크톱 공식이면 34.9px), 375px 공식값 27px(설계값), **가로 오버플로 0**.
+- **🔴 신규 발견: 자정 크론 스캔 12일 멈춤(최근 scan_runs 2026-07-11)** — 대시보드 "스캔 지연 309시간" 배너로 발견. 진단(SQL Editor):
+  - `cron.job`: jobid 1 `daily-breach-scan` `0 15 * * *` **active=true** — 크론 자체는 정상.
+  - `cron.job_run_details`: 7/17~7/22 매일 15:00 UTC **succeeded**("1 row") — 트리거도 정상.
+  - `net._http_response` 최신: **status_code NULL, "Timeout of 120000 ms reached"** — **Edge 함수가 pg_net 120s 내 미응답**. 원인 = 순차 수집기 + WORKER_RESOURCE_LIMIT(Edge 워커 강제종료 → scan_runs 기록 없이 사망). `6c252be` 병렬화가 바로 이 수정인데 **Edge 재배포가 안 된 상태**였음 → **오늘 배포로 해결됐을 것**.
+  - 수동 트리거는 auto모드 분류기 차단(프로덕션 mutation) → **검증은 오늘 밤 크론(15:00 UTC=자정 KST) 후 scan_runs 확인**. 즉시 확인하려면 사용자가 SQL Editor Run: `DO $$ DECLARE cmd text; BEGIN SELECT command INTO cmd FROM cron.job WHERE jobid = 1; EXECUTE cmd; END $$;`
+- **남은 확인**: [ ] 내일 아침 scan_runs에 07-24 자정 행 생겼는지(크론 복구 확증). 안 생겼으면 Edge Functions Logs에서 WORKER_RESOURCE_LIMIT 재발 여부 확인 — 재발 시 수집기 상한(SEARCH_LIMIT 등) 추가 축소 검토.
