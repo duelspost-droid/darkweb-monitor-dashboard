@@ -651,3 +651,25 @@ cd /Users/hk/darkweb-monitor-dashboard && npm run supabase:pull
 ### 남은 확인/후속
 - [ ] 사내망(임원 PC)에서 jsdelivr/Google Fonts CDN 차단 여부 실기기 확인 — 차단 시 `public/fonts` woff2 셀프호스팅 전환.
 - [ ] 실기기 모바일(375px 이하) 육안(폰트·헤어라인·바리스트 렌더).
+
+## 23. 세션 로그 — 2026-07-23 (밤) '오늘의 보안 뉴스' 기능 추가 (PR#2=3be4c3a, 라이브 검증 완료)
+
+> 사용자 "대시보드에 최신 보안뉴스 배치 — 금융 관련 우선, 매일 갱신, 아침 출근길 참고용".
+
+### 데이터소스 결정
+- **Google News RSS**(`news.google.com/rss/search?q=<쿼리>&hl=ko&gl=KR&ceid=KR:ko`) — 무료·키불요·**서버사이드 fetch라 CORS 무관**(클라이언트 RSS는 CORS 막힘 → 서버 수집 필수). 7쿼리: 금융보안·개인정보·랜섬웨어·다크웹·사이버공격·취약점. `<title>제목 - 매체</title>` 분리, `/articles/<ID>`를 news_id로 중복제거. 로컬 실측: ~1초에 84건·금융 31·https 84/84·dedup 0.
+
+### 구현
+- **마이그 018** `security_news`(news_id PK·title·url·source·category·is_finance·published_at·fetched_at) + **anon 읽기 RLS**(`TO anon,authenticated USING(true)` + GRANT). 공개 뉴스라 로그인 전 미리보기 가능. 쓰기는 service_role(배치)만.
+- **Edge**(scan-breaches): `collectSecurityNews`/`sbUpsertNews`/`sbPruneNews`. 유출 스캔과 **병렬 실행**(newsTask를 핸들러 초입에 시작→말미에 await, 네트워크 대기 겹침) + **await 하드 상한 `Promise.race(20s)`**(fetchT는 헤더까지만 abort 보호 → 본문 스트림 정체 시 hang → 스캔 응답 인질·WORKER_RESOURCE_LIMIT 사망 방지). prune는 **fetched_at 기준**(NOT NULL·매 배치 갱신 → published_at NULL 행도 회수). sources provenance에 '보안 뉴스 (Google News)' 추가.
+- **Node 미러** `collectAndLoadSecurityNews` + main에서 `Promise.race(20s)` 하드 상한.
+- **프런트**: `SecurityNewsPanel`(KPI 바로 아래 배치, 카테고리 필터칩·금융 배지·금융우선 정렬·max-h 스크롤·'갱신'=전체 최신 게시시각) + `LoginNewsPreview`(로그인 전 상위 5건). 외부링크 **`safeHttpUrl` https 가드**(javascript:/data: 차단), fetch order **`nullsFirst:false`**.
+
+### 검증
+- **멀티에이전트 4렌즈 적대검증**(Edge견고성·XSS/프라이버시·프런트정합·데이터/마이그): **확정 blocker/high 0**. medium 4건(뉴스 hang 보호·published_at NULL prune 누수·'갱신'시각 계산·빈필터 상태) **전부 반영**.
+- `next build`·tsc·esbuild·`node --check` 통과. Turbopack 대괄호 정규식 파손 없음.
+- ✅ **프로덕션 E2E 라이브 검증**: PR#2 머지→Pages배포 success → **마이그 018 적용**(SQL Editor Run, "Success") → **Edge 재배포**(raw 주입 61,781→66,991자, "Successfully updated") → **수동 트리거**(cron jobid=1 동일) → `security_news` **84건(금융 31)** 적재 확인 → **라이브 대시보드 육안**: '오늘의 보안 뉴스' 패널 KPI 아래 렌더, 필터칩(전체80·금융27·개인정보/랜섬웨어/다크웹/취약점/사이버공격 각12), 금융 우선 정렬, 실뉴스(지디넷·데일리시큐·연합 등)·상대시각("11시간 전"), 16 news.google.com 링크. → **내일부터 자정 크론이 자동 갱신.**
+
+### 남은 확인
+- [ ] 로그인 화면 미리보기(LoginNewsPreview) 실제 노출 — anon RLS·GRANT 로 구성상 검증됨, 로그아웃 육안은 미실시(세션 유지 위해). 
+- [ ] 모바일 실기기에서 뉴스 패널 육안.
