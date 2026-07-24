@@ -718,3 +718,12 @@ cd /Users/hk/darkweb-monitor-dashboard && npm run supabase:pull
 ### 개발환경 상태 (이 PC 기준)
 - 로컬 = origin/main 동기화 완료. node v24/npm11(Codex.app 경로, PATH에 추가 필요), `npm run typecheck` 통과, `.env.local`(URL+anon key) 보존. preview 런처 `darkweb`(port 3000, **`--webpack` 필수**). 마이그 001~018.
 - 이전 미커밋 잔재(전부 origin에 이미 반영된 구버전)는 `git stash@{0}` 에 보존.
+
+## 25. 세션 로그 — 2026-07-24 (밤) 잔여 3건(폰트 셀프호스팅·크론 확증·7시 스케줄)
+
+> 사용자 "1,2,3 적용해" (1=크론 새벽7시, 2=크론 자동실행 확인, 3=디자인 잔여-폰트/모바일).
+
+- **✅ #2 크론 자동복구 확증(라이브 진단)**: SQL 조회 — db_now 2026-07-24 18:36 UTC, `cron.job_run_details` 최신 발화 **2026-07-24 15:00:00 succeeded**, `scan_runs` 최신 **2026-07-24 15:00:01**. → 자정(KST) 크론이 **자동 발화·성공** 확인(21b 복구가 지속됨). is_new/뉴스도 그 배치로 자동 갱신.
+- **✅ #3 웹폰트 셀프호스팅(PR#4=머지·라이브검증)**: 사내망 CDN 차단 리스크 원천 제거. `public/fonts` 에 woff2 3종(PretendardVariable 2MB·JetBrainsMono Regular/SemiBold, jsdelivr `packages/pretendard/dist/web/variable/woff2/` 경로에서 취득), `globals.css` `@font-face` 3종(`font-display:swap`), `layout.tsx` head CDN링크→로컬 preload 2종. export 빌드가 `out/fonts` 복사 확인. **라이브 검증**: `/fonts/*.woff2` 3개 전부 **200 font/woff2**(같은 출처 dark.jbax.co.kr), `document.fonts.check` Pretendard·JetBrains **true**, 잔존 CDN 링크 **0**. (전체 2MB Pretendard 1회 다운로드 트레이드오프 수용 — 내부 임원툴이라 캐시로 상쇄.) ⚠️모바일 실기기 육안은 여전히 미실시(자동화 375px는 검증됨).
+- **⛔ #1 크론 새벽7시 변경 — 미적용(사용자 실행 필요)**: `SELECT cron.alter_job(1, schedule => '0 22 * * *');` (22:00 UTC=07:00 KST). **auto모드 분류기가 이 프로덕션 SQL의 에디터 주입(setValue)을 차단** → 에이전트가 못 넣음(마이그/스캔트리거와 달리 alter_job은 일관 차단됨). **소유자가 SQL Editor에 직접 타이핑 후 Run 해야 함.** 프런트 문구는 이미 "새벽 7시"라 이 SQL 적용 전까지 **문구↔실제(자정) 불일치** 유지. 적용 후 `select schedule from cron.job where jobid=1;` 로 `0 22 * * *` 확인.
+- 마이그 001~018(신규 없음). 다음 확인: #1 적용 여부, 모바일 실기기 폰트 육안.
