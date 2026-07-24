@@ -688,3 +688,33 @@ cd /Users/hk/darkweb-monitor-dashboard && npm run supabase:pull
 4. **23절 보안 뉴스**(PR#2=3be4c3a) — 대시보드 '오늘의 보안 뉴스'(Google News RSS·금융우선·매일 자정 자동갱신·로그인전 미리보기), 멀티에이전트 적대검증.
 
 **⚠️ 운영 핵심**: 크론 `daily-breach-scan`(jobid=1, `0 15 * * *` UTC=자정 KST)이 유출 스캔 **+ 보안 뉴스**를 함께 수집. Edge 재배포는 Chrome monaco raw 주입(`getModels()[0].setValue(fetch main raw)`→Deploy), 마이그·스캔트리거는 SQL Editor Run(agent는 분류기 차단, 사용자/btn.click). **다음 아침(07-24) scan_runs 자동행 확인 권장**(크론 자동 정상 확증).
+
+---
+
+## 24. 세션 로그 — 2026-07-24 (뉴스 중복제거+10건 · 개발경로/배포상태 정정)
+
+> 다른 PC 인계용. 이번 세션 실작업 1건 + 미완 1건 + **다음 작업자가 반드시 알아야 할 정정 3가지**.
+
+### ✅ 완료: 뉴스 중복 기사 정리 + 10건 축약 (PR#3 = `b9cdb38`, main 머지·라이브 검증)
+- 사용자 지시: "기사 중복내용은 하나만, 10개정도만, 매일 새벽 7시에".
+- **문제**: 배치는 `news_id`(Google 기사 ID)로만 중복제거 → **매체가 다르면 ID가 달라** 같은 사건이 그대로 쌓임. 실측 92건 중 따릉이 8·외교부 7·더젠틀맨 5·셀렉트스타 4가 같은 사건.
+- **구현**(`app/DashboardClient.tsx`): `dedupeNews()` 신설. 제목을 한글/영숫자 토큰화 → **코퍼스 문서빈도(DF)** 로 변별력 있는 고유명사만 시그니처로 추출(DF 하한 2, 상한 코퍼스의 12% — 그 이상은 `유출·해킹·개인정보` 같은 일반어라 사건 식별력 없음) → 시그니처가 겹치면 같은 사건으로 보고 **대표 1건만** 유지. 형태소분석기·외부의존 없음. `SecurityNewsPanel` 노출 **16→10건**, `LoginNewsPreview`(로그인 전)에도 적용. 배지/필터칩 카운트를 중복제거 기준으로 변경.
+- ⚠️ **`.tsx` 대괄호 정규식 금지**(Turbopack이 tailwind 클래스로 오인해 파손) 제약 → 정규식 대신 **문자 코드(codePointAt)로 한글/영숫자 판별**.
+- **검증**: `.tsx`에 실제 들어간 함수를 추출해 라이브 92건으로 실행 → **92→29건**(따릉이 8→1·외교부 7→1·젠틀맨 5→1·셀렉트스타 4→1). `npm run typecheck` 통과. **라이브 육안**(dark.jbax.co.kr 로그인 미리보기): 셀렉트스타 1건·따릉이/외교부 중복 0 확인.
+
+### ⏳ 미완: "매일 새벽 7시" 갱신 — 크론 스케줄 변경 (사용자 대기)
+- 프런트 부제는 이미 "매일 새벽 7시 자동 갱신"으로 바꿔둠 → **실제 적용은 아래 SQL 한 줄 필요**:
+  ```sql
+  SELECT cron.alter_job(1, schedule => '0 22 * * *');  -- 22:00 UTC = 07:00 KST
+  ```
+- ⚠️ jobid=1 크론은 **유출 스캔+뉴스를 함께** 돌리므로, 이걸 바꾸면 스캔 전체가 새벽 7시로 이동(출근 시점 최신 데이터라 오히려 유리).
+- **에이전트가 이 SQL을 못 돌린 이유 2가지**: (a) auto모드 분류기가 프로덕션 SQL Run 차단, (b) **이 세션의 자동화 크롬이 `api.supabase.com`에 못 닿아 SQL Editor가 blank**(아래 정정#2). → **다른 PC(정상 브라우저)에서 SQL Editor Run 하거나**, 대안으로 GitHub Actions 워크플로(`0 22 * * *`)에서 SCAN_SECRET로 함수 curl 트리거(자정 pg_cron은 유지, 하루 2회 무해)를 추가하면 됨.
+
+### 🔧 정정 3가지 (기존 HANDOFF/메모리의 오래된 정보 갱신)
+1. **로컬 git push 됨 (SSH, PAT 불필요)** — remote=`git@github.com:duelspost-droid/...`, `ssh -T git@github.com` OK, `gh` CLI 인증됨(keyring). **프런트/문서 변경은 브라우저 CodeMirror 주입 삽질 불필요 → 로컬 브랜치 커밋→`git push`→`gh pr create`→머지→Pages 자동배포**가 정상 경로. (이번 PR#3도 이 경로로 처리, ~수초.) 단 **Edge Function 배포는 여전히 CI 없음 → Chrome 수동 주입만**.
+2. **자동화 크롬(claude-in-chrome)은 `api.supabase.com`(관리 API)에 못 닿음** → Supabase **대시보드(SQL Editor·Edge Functions 코드)가 렌더 안 됨**(정적자산 200인데 앱 bodyLen 0). 30초 대기·새탭·콘솔확인 모두 blank. **frontend-assets·{ref}.supabase.co(프로젝트 PostgREST)·github.com·gitlab.com은 정상**. 즉 **Supabase 대시보드를 거치는 작업(SQL Run·Edge 배포)만 이 세션에서 불가** → 소유자 본인 브라우저 또는 다른 PC에서. (소유자 평소 브라우저는 정상 — 이번 달 배포·마이그레이션 다 그렇게 함.)
+3. **병렬화(6c252be)는 이미 라이브 배포됨** — 이전 세션에서 "커밋만 되고 미배포"로 오판했으나, 07-23에 다른 PC가 재배포해 **12일 멈췄던 자정 크론이 복구**됨(21b절). anon으로 `security_news` 최신 `fetched_at`=2026-07-23T22:32Z, 92건 실측 확인. **커밋≠배포를 항상 분리 확인할 것**(Edge는 CI 없어 수동배포라 이 함정 반복됨).
+
+### 개발환경 상태 (이 PC 기준)
+- 로컬 = origin/main 동기화 완료. node v24/npm11(Codex.app 경로, PATH에 추가 필요), `npm run typecheck` 통과, `.env.local`(URL+anon key) 보존. preview 런처 `darkweb`(port 3000, **`--webpack` 필수**). 마이그 001~018.
+- 이전 미커밋 잔재(전부 origin에 이미 반영된 구버전)는 `git stash@{0}` 에 보존.
