@@ -14,21 +14,12 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="ko">
-      {/* 웹폰트 — Pretendard Variable(본문·제목, dynamic subset) + JetBrains Mono(수치·모노).
-          CDN 차단 시(사내망 등) 시스템 폰트로 조용히 폴백. */}
+      {/* 웹폰트 — 앱과 같은 출처(GitHub Pages)에서 셀프호스팅(@font-face in globals.css).
+          사내망 CDN 차단과 무관하게 항상 로드됨. 미로드 시 시스템 폰트로 조용히 폴백.
+          preload 로 초기 렌더 폰트만 우선 로드(FOUT 축소). */}
       <head>
-        <link rel="preconnect" href="https://cdn.jsdelivr.net" crossOrigin="anonymous" />
-        <link
-          rel="stylesheet"
-          href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css"
-          crossOrigin="anonymous"
-        />
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link
-          href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap"
-          rel="stylesheet"
-        />
+        <link rel="preload" href="/fonts/PretendardVariable.woff2" as="font" type="font/woff2" crossOrigin="anonymous" />
+        <link rel="preload" href="/fonts/JetBrainsMono-Regular.woff2" as="font" type="font/woff2" crossOrigin="anonymous" />
       </head>
       <body>
         <header className="topbar">

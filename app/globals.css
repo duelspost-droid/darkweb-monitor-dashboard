@@ -2,6 +2,29 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── 셀프호스팅 웹폰트 (public/fonts, 앱과 같은 출처 → 사내망 CDN 차단 무관) ── */
+@font-face {
+  font-family: "Pretendard Variable";
+  font-weight: 45 920;      /* 가변 폰트 전체 웨이트 범위 */
+  font-style: normal;
+  font-display: swap;        /* 로드 전 시스템 폰트로 즉시 표시(FOIT 방지) */
+  src: url("/fonts/PretendardVariable.woff2") format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+  src: url("/fonts/JetBrainsMono-Regular.woff2") format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+  src: url("/fonts/JetBrainsMono-SemiBold.woff2") format("woff2");
+}
+
 /* ═══════════════════════════════════════════════════════════════
    Refined Glass Minimal — Quiet Premium SOC (2026 리프레시)
    원칙: 조용한 프리미엄. 모션은 절제(hero breathe + 라이브 도트 2개뿐),
