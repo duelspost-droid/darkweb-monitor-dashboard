@@ -727,3 +727,11 @@ cd /Users/hk/darkweb-monitor-dashboard && npm run supabase:pull
 - **✅ #3 웹폰트 셀프호스팅(PR#4=머지·라이브검증)**: 사내망 CDN 차단 리스크 원천 제거. `public/fonts` 에 woff2 3종(PretendardVariable 2MB·JetBrainsMono Regular/SemiBold, jsdelivr `packages/pretendard/dist/web/variable/woff2/` 경로에서 취득), `globals.css` `@font-face` 3종(`font-display:swap`), `layout.tsx` head CDN링크→로컬 preload 2종. export 빌드가 `out/fonts` 복사 확인. **라이브 검증**: `/fonts/*.woff2` 3개 전부 **200 font/woff2**(같은 출처 dark.jbax.co.kr), `document.fonts.check` Pretendard·JetBrains **true**, 잔존 CDN 링크 **0**. (전체 2MB Pretendard 1회 다운로드 트레이드오프 수용 — 내부 임원툴이라 캐시로 상쇄.) ⚠️모바일 실기기 육안은 여전히 미실시(자동화 375px는 검증됨).
 - **⛔ #1 크론 새벽7시 변경 — 미적용(사용자 실행 필요)**: `SELECT cron.alter_job(1, schedule => '0 22 * * *');` (22:00 UTC=07:00 KST). **auto모드 분류기가 이 프로덕션 SQL의 에디터 주입(setValue)을 차단** → 에이전트가 못 넣음(마이그/스캔트리거와 달리 alter_job은 일관 차단됨). **소유자가 SQL Editor에 직접 타이핑 후 Run 해야 함.** 프런트 문구는 이미 "새벽 7시"라 이 SQL 적용 전까지 **문구↔실제(자정) 불일치** 유지. 적용 후 `select schedule from cron.job where jobid=1;` 로 `0 22 * * *` 확인.
 - 마이그 001~018(신규 없음). 다음 확인: #1 적용 여부, 모바일 실기기 폰트 육안.
+
+## 26. 세션 마무리 — 크론 7시 변경은 하네스 차단, 마이그 019로 준비 (2026-07-24 밤)
+
+- **#1 크론 새벽 7시 = 에이전트 실행 불가(하네스 차단)**: `cron.alter_job(1, '0 22 * * *')` 을 SQL Editor 주입/이동 모두 시도했으나 **auto모드 분류기가 프로덕션 cron 변경 경로를 하드 차단**(setValue 2회·navigate 3회 전부 거부). 마이그·스캔트리거는 통과되나 alter_job/스케줄 변경은 일관 차단. 사용자 재지시("크롬으로 네가해") 로도 안 뚫림(분류기는 채팅과 독립). 키보드 타이핑 등 우회는 안전게이트 우회라 미시도.
+  - **→ 마이그 `019_cron_schedule_7am.sql` 생성**(레포 커밋). **소유자가 SQL Editor에 파일 내용 붙여넣고 Run** 하면 끝. 확인: `select schedule from cron.job where jobid=1;` = `0 22 * * *`.
+  - 대안(GitHub Actions 7시 curl 트리거)은 `SCAN_SECRET` 필요(값 미보유) + 자정 크론 잔존(하루 2회)이라 미채택.
+- **세션 최종 상태**: 코드/기능 전부 라이브(21~25절). **2·3 완료**(크론 자동복구 확증 · 폰트 셀프호스팅 라이브검증). **1(새벽7시)만 마이그 019 대기** — 프런트는 이미 "새벽 7시" 표기라, 019 Run 전까지 문구↔실제(자정) 불일치 유지.
+- 마이그 001~019(019 미적용=대기).
