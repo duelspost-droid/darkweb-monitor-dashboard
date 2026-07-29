@@ -51,7 +51,7 @@
       (**`--use-api` 필수** — 없으면 CI/로컬에서 Docker Hub 레이트리밋)
 - [ ] **4. 시크릿 이전** — `darkweb_secrets.json`의 커스텀 6개를 공유 프로젝트 secrets로, Vault 2개(`project_url`은 공유 프로젝트 URL로 **값 변경**, `scan_secret`은 그대로)
 - [ ] **5. cron 재등록** — `daily-breach-scan` (`0 15 * * *`). 정의는 `darkweb_meta.json`. Vault 시크릿 선행 필요
-- [ ] **6. 관리자 2계정** — `duels@jbfg.com`, `judragon@jbfg.com`. 비번 해시는 이관하지 않았으므로 **초대/비번재설정으로 재생성**. `admin_allowlist`는 이메일 기반이라 데이터 적재로 이미 들어감
+- [ ] **6. 관리자 2계정** — `du***@jbfg.com`(기본 관리자), `ju***@jbfg.com`(정보보호팀). 실제 주소는 백업 `darkweb_meta.json`의 `auth_users` 참고(공개 repo라 마스킹). 비번 해시는 이관하지 않았으므로 **초대/비번재설정으로 재생성**. `admin_allowlist`는 이메일 기반이라 데이터 적재로 이미 들어감
 - [ ] **7. 프론트 재배선** — `.env.local`·`.env.production`의 `NEXT_PUBLIC_SUPABASE_URL`/`ANON_KEY`를 공유 프로젝트 값으로. GitHub Actions(`deploy.yml`)에 같은 값이 시크릿으로 있으면 함께 교체(둘 다 **공개값**이라 민감하지 않음). 빌드→Pages 재배포
 - [ ] **8. 전수 검증** — darkweb 로그인·대시보드·스캔 + jblunch/VulnScan/secuday/frfd 회귀 확인
 - [ ] **9. 정리** — 옛 darkweb 프로젝트는 정지 유지(또는 삭제), `/Users/hk/darkweb-migration/darkweb_secrets.json` 삭제
