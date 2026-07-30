@@ -1,6 +1,35 @@
-# darkweb → 공유 Supabase 프로젝트 통합 (진행 중)
+# darkweb → 공유 Supabase 프로젝트 통합 ✅ **완료 (2026-07-30)**
 
-> 최종 업데이트: 2026-07-09 · **현재 darkweb 서비스는 다운(프로젝트 정지) 상태**
+> darkweb 대시보드는 이제 공유 프로젝트 `nrdapzgtibbusvoaceuh` 위에서 동작한다.
+> 라이브 검증: 프론트가 호출하는 Supabase 프로젝트 = **새 공유 프로젝트뿐**(옛 `elaoeff...` 호출 0건), 보안 뉴스 정상 렌더.
+
+## 최종 결과
+
+| 항목 | 결과 |
+|---|---|
+| 테이블 | 8/8 |
+| DB 함수 | 6/6 (`trigger_scan`은 옛 URL 하드코딩을 새 URL로 교정) |
+| RLS 정책 | 14/14 |
+| cron | `daily-breach-scan` 등록 |
+| Edge 함수 | `admin-users`·`scan-breaches` ACTIVE |
+| 데이터 | **498행** (백업 444 + 스캔으로 새로 수집한 뉴스, 중복 제외) |
+| 시크릿 | 커스텀 6 + Vault 2 (`project_url`은 새 프로젝트로 교체) |
+| 관리자 | `du***@jbfg.com` 로그인 가능(계정 존재 + admin_allowlist 등재) |
+| 프론트 | GitHub Secrets(URL/anon key) 교체 → 재배포 → 새 백엔드 사용 확인 |
+
+**효과**: 무료 org 프로젝트가 3개 → 2개(shared + silvertown)로 줄어 **활성 2개 한도 초과로 인한 강제 정지가 구조적으로 재발하지 않는다.** 비용 $0.
+
+## 남은 정리 (선택)
+
+- [ ] `ju***@jbfg.com` 계정: 공유 프로젝트 auth에 아직 없음. 필요하면 Supabase 대시보드에서 초대(비번은 본인이 설정). `admin_allowlist`엔 이미 등재돼 있어 계정만 만들면 바로 관리자 권한.
+- [ ] **`/Users/hk/darkweb-migration/darkweb_secrets.json` 삭제 권장** (GitHub/GitLab 토큰 포함).
+- [ ] 옛 프로젝트 `elaoeffpzrswpdpfuoil`: 정지 상태 유지(또는 삭제). 되살릴 필요 없음.
+- [ ] 첫 정식 스캔은 매일 15:00 UTC(00:00 KST) cron이 수행. 즉시 확인하려면 대시보드에서 강제 스캔.
+
+---
+
+<details>
+<summary>이관 과정 기록 (참고)</summary>
 
 ## 왜 하는가
 
@@ -116,3 +145,6 @@ Claude가 시도한 3개 경로 모두 차단됐고(**우회하지 않음**), �
 
 → 재개하려면 **사용자가 아래 (a) 명령을 직접 실행**하거나, 세션에 Bash 권한 규칙을 직접 추가하면 된다.
    스크립트는 멱등이라 이미 끝난 1단계를 다시 돌려도 안전하다.
+
+
+</details>
