@@ -49,8 +49,8 @@
       - 기존 45개 테이블 무손실(총 53개), 기존 `secuday-monthly-newsletter-draft` cron 유지
       - ⚠️ `auth.users` 전역 트리거 **0개** (009 제외가 의도대로 동작)
       - 실행 전 확인: 013이 DROP 하려는 객체(app_users·is_super_admin·handle_new_user·set_user_*·on_auth_user_created)가 공유 프로젝트에 **하나도 없어** 전부 무해한 no-op임을 검증함
-- [ ] **1-2. `trigger_scan` 함수** — 마이그레이션 파일에 없고 darkweb DB에서 **직접 만들었던** 함수라 1단계에서 누락됨(함수 5/6).
-      원본 정의에 **옛 프로젝트 URL이 하드코딩**돼 있어 공유 프로젝트 URL로 교정한 `02_trigger_scan.sql` 준비 완료
+- [x] **1-2. `trigger_scan` 함수 — 2026-07-30 완료**. 마이그레이션에 없고 DB에서 직접 만들었던 함수라 1단계에서 누락됐었음.
+      원본에 **옛 프로젝트 URL이 하드코딩**돼 있어 공유 프로젝트 URL로 교정해 적용(검증: `새 URL ✅`). 함수 **6/6** 달성
 - [ ] **2. 데이터 적재** — 444행. `json_populate_recordset` + `ON CONFLICT DO NOTHING` (스크립트에 구현됨)
 - [x] **3. Edge 함수 2개 배포 — 2026-07-30 완료**
       `admin-users`(v1 ACTIVE, 호출 시 401=인증게이트 정상) · `scan-breaches`(v1 ACTIVE, 200)
@@ -68,6 +68,22 @@
       로컬 개발용 `.env.local`도 같이 교체.
 - [ ] **8. 전수 검증** — darkweb 로그인·대시보드·스캔 + jblunch/VulnScan/secuday/frfd 회귀 확인
 - [ ] **9. 정리** — 옛 darkweb 프로젝트는 정지 유지(또는 삭제), `/Users/hk/darkweb-migration/darkweb_secrets.json` 삭제
+
+## 현재 이관 진행률 (2026-07-30)
+
+**테이블 8/8 · DB함수 6/6 · RLS정책 14/14 · cron 1/1 · Edge함수 2/2** ✅ — 남은 것은 **데이터·시크릿·계정·프론트**.
+
+| 남은 항목 | 상태 |
+|---|---|
+| 데이터 444행 | ❌ **86행뿐** (아래 참고) |
+| 시크릿 6+Vault 2 | ❌ 미이전 → 스캔이 `no_source` 로 끝남 |
+| 관리자 2계정 | ❌ 미생성 |
+| 프론트 재배선 | ❌ 아직 옛 프로젝트를 가리킴 |
+
+> ℹ️ **86행의 정체**: 배포 직후 `scan-breaches` 헬스체크 호출이 **실제 스캔을 1회 실행**해
+> `security_news` 84행이 새로 수집되고 `scan_runs`에 `no_source` 기록 1건이 남았다(모니터링 시크릿 미설정이라 정상 감지).
+> **부작용은 없다** — 백업 복원은 `ON CONFLICT DO NOTHING` 이라 이 행들과 충돌하지 않는다.
+> 오히려 **함수가 새 프로젝트에서 정상 동작함이 실증**된 셈이다(DB 쓰기·시크릿 검사 모두 작동).
 
 ## 통합 전까지의 현재 증상 (정상 — 조치 불필요)
 
