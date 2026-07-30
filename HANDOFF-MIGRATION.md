@@ -52,11 +52,14 @@
 - [ ] **1-2. `trigger_scan` 함수** — 마이그레이션 파일에 없고 darkweb DB에서 **직접 만들었던** 함수라 1단계에서 누락됨(함수 5/6).
       원본 정의에 **옛 프로젝트 URL이 하드코딩**돼 있어 공유 프로젝트 URL로 교정한 `02_trigger_scan.sql` 준비 완료
 - [ ] **2. 데이터 적재** — 444행. `json_populate_recordset` + `ON CONFLICT DO NOTHING` (스크립트에 구현됨)
-- [ ] **3. Edge 함수 2개 배포** — `admin-users`, `scan-breaches` → 공유 프로젝트로.
-      `SUPABASE_ACCESS_TOKEN=sbp_... npx supabase functions deploy <fn> --project-ref nrdapzgtibbusvoaceuh --use-api`
-      (**`--use-api` 필수** — 없으면 CI/로컬에서 Docker Hub 레이트리밋)
-- [ ] **4. 시크릿 이전** — `darkweb_secrets.json`의 커스텀 6개를 공유 프로젝트 secrets로, Vault 2개(`project_url`은 공유 프로젝트 URL로 **값 변경**, `scan_secret`은 그대로)
-- [ ] **5. cron 재등록** — `daily-breach-scan` (`0 15 * * *`). 정의는 `darkweb_meta.json`. Vault 시크릿 선행 필요
+- [x] **3. Edge 함수 2개 배포 — 2026-07-30 완료**
+      `admin-users`(v1 ACTIVE, 호출 시 401=인증게이트 정상) · `scan-breaches`(v1 ACTIVE, 200)
+      명령: `SUPABASE_ACCESS_TOKEN=sbp_... supabase functions deploy <fn> --project-ref nrdapzgtibbusvoaceuh --use-api`
+      (**`--use-api` 필수** — 없으면 Docker Hub 레이트리밋)
+- [ ] **4. 시크릿 이전** — 커스텀 6개 + Vault 2개. **스크립트 B-2 단계에 구현됨**
+      (`project_url`은 공유 프로젝트 URL로 **자동 교체**, `scan_secret`은 원본 유지)
+- [x] **5. cron 재등록 — 1단계에서 자동 완료** (`daily-breach-scan` `0 15 * * *` 등록됨).
+      단 Vault 시크릿(4단계)이 있어야 실제 호출이 성공한다
 - [ ] **6. 관리자 2계정** — `du***@jbfg.com`(기본 관리자), `ju***@jbfg.com`(정보보호팀). 실제 주소는 백업 `darkweb_meta.json`의 `auth_users` 참고(공개 repo라 마스킹). 비번 해시는 이관하지 않았으므로 **초대/비번재설정으로 재생성**. `admin_allowlist`는 이메일 기반이라 데이터 적재로 이미 들어감
 - [ ] **7. 프론트 재배선** — ⚠️ 값의 출처는 **`.env.production`이 아니라 GitHub Actions 시크릿**이다
       (`.env.production`엔 `NEXT_PUBLIC_ADMIN_EMAIL`만 있고, URL/키는 `deploy.yml` env 로 주입됨).
@@ -73,10 +76,12 @@
 
 ## 실행 방법 (택1)
 
-**(a) 자동 스크립트** — 1·2단계를 한 번에, 멱등:
+**(a) 자동 스크립트 — 남은 DB/시크릿 작업을 한 번에** (멱등, 이미 끝난 단계는 무해하게 재실행):
 ```bash
 python3 /Users/hk/darkweb-migration/migrate_darkweb.py
 ```
+수행: `A` 스키마(완료분 재적용) → `A-2` trigger_scan → `B` 데이터 444행 → `B-2` 시크릿 6+Vault 2 → `C` 검증.
+이 한 번이면 **남는 건 6번(관리자 계정)과 7번(프론트 재배선)뿐**이다.
 
 **(b) 대시보드 SQL Editor** — 내용을 눈으로 확인하며 진행:
 `https://supabase.com/dashboard/project/nrdapzgtibbusvoaceuh/sql/new` 에 `01_schema.sql` 붙여넣고 Run → 이어서 데이터.
