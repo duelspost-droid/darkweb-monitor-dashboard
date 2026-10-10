@@ -741,3 +741,14 @@ cd /Users/hk/darkweb-monitor-dashboard && npm run supabase:pull
   - 대안(GitHub Actions 7시 curl 트리거)은 `SCAN_SECRET` 필요(값 미보유) + 자정 크론 잔존(하루 2회)이라 미채택.
 - **세션 최종 상태**: 코드/기능 전부 라이브(21~25절). **2·3 완료**(크론 자동복구 확증 · 폰트 셀프호스팅 라이브검증). **1(새벽7시)만 마이그 019 대기** — 프런트는 이미 "새벽 7시" 표기라, 019 Run 전까지 문구↔실제(자정) 불일치 유지.
 - 마이그 001~019(019 미적용=대기).
+
+## 27. 🔴 배치 중단 = Supabase 프로젝트 정지 (2026-09-29 진단, 10-10 재확인·미해결)
+
+> "일 배치가 멈췄다" 조사 결과 — pg_cron/Edge 문제가 아니라 **프로젝트 자체가 정지(paused)**.
+
+- **근본 원인**: 무료 조직 **"duelspost-droid's Org"(Free)에 프로젝트 3개**인데 **무료는 활성 2개 한도**. darkweb-monitor-dashboard(ap-northeast-2)가 정지됨. 처음엔 7일 비활성 자동정지, 이후 **활성 2개 한도 때문에 재개도 차단**(Resume 클릭 시 다이얼로그: "duelspost-droid (Limit: 2 free projects) … delete/pause/upgrade one before resume").
+- **같은 무료 조직 활성 2개**: `duelspost-droid's Project`(ap-south-1, 기본이름=용도 미상) · `silvertown-app`(ap-northeast-2, = silverstay.co.kr 라이브앱, 절대 안 건드림). 별도 **korail 조직은 Pro(유료)·2 프로젝트**.
+- **왜 안 보였나**: GHA `deploy.yml`(Scan and Deploy)은 스캔이 아니라 `supabase:pull`+배포만. pull이 `continue-on-error`+빈 스냅샷 폴백이라 매일 "success"로 보였으나 실제 DB·스캔은 죽어 있었음. (`breachMonitor.ts`는 원래 의도적으로 비어있어 신선도 단서 안 됨 — generatedAt 타임스탬프만 갱신.)
+- **확인법(라이브)**: 정지 프로젝트는 `{ref}.supabase.co` 가 **DNS NXDOMAIN**(2026-10-10 확인) → anon REST fetch 즉시 실패. Supabase 대시보드엔 "Project is paused" 배너.
+- **해결 = 사용자 결정 필요**(제가 임의 불가: 다른 앱 희생/비용): ①`duelspost-droid's Project`(미사용이면) 정지→슬롯 확보→darkweb 재개(무료·즉시) ②darkweb을 korail Pro 조직으로 이전(정지 영구 해소, 소액 컴퓨트비용 가능) ③무료조직 Pro 업그레이드(월 $25). ⚠️**무료 유지 시 3개 중 2개만 돌아감 = 재발 구조적**. 킵얼라이브는 '개수 한도'엔 무력(개수부터 ≤2 또는 Pro).
+- **재개 후 할일**: pg_cron(jobid=1) 재가동 확인 + 마이그 **019(크론 7시, `0 22 * * *`) 아직 미적용** 같이 Run + 스캔 1회 트리거. (019는 레포에 있으나 DB 미적용 상태.)
